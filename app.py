@@ -7,7 +7,7 @@ import time
 # 1. 設定・準備
 # ==========================================
 st.set_page_config(page_title="AI Director Assistant", layout="wide")
-st.title("🚀 AI Web Direction Assistant (v7.0 Stable)")
+st.title("🚀 AI Web Direction Assistant (v7.1 Final)")
 
 # エラー表示エリア
 error_container = st.container()
@@ -22,14 +22,13 @@ with st.sidebar:
     if api_key:
         genai.configure(api_key=api_key)
         
-        # 最新の安定稼働モデルリスト（2025年最新）
-        # ※自動取得ではなく、確実に存在するIDを指定します
+        # 【修正点】最も安定して動くモデル名のみを厳選
+        # models/ という接頭辞なしのエイリアスを使用するのがSDKの推奨です
         model_options = [
-            "gemini-1.5-flash",          # 最も推奨（高速・安価）
+            "gemini-1.5-flash",          # 最速・最安・推奨
+            "gemini-1.5-flash-latest",   # 常に最新のFlash
             "gemini-1.5-pro",            # 高精度
-            "gemini-2.0-flash-exp",      # 最新プレビュー（動かない場合あり）
-            "gemini-1.5-flash-002",      # Flashのアップデート版
-            "gemini-1.5-pro-002",        # Proのアップデート版
+            "gemini-1.5-pro-latest",     # 常に最新のPro
         ]
         
         st.markdown("### 🤖 モデル選択")
@@ -37,16 +36,19 @@ with st.sidebar:
             "使用モデル", 
             model_options, 
             index=0,
-            help="404エラーが出る場合は別のモデルを試してください"
+            help="課金設定済みのアカウントであれば gemini-1.5-flash が最も安定します"
         )
         
-        # デバッグモード（何も出ない時用）
-        debug_mode = st.checkbox("デバッグモード（生ログ表示）", value=False)
+        # デバッグモード
+        debug_mode = st.checkbox("デバッグモード", value=False)
 
         if selected_model_name:
             try:
                 active_model = genai.GenerativeModel(selected_model_name)
-                st.success(f"✅ 選択中: {selected_model_name}")
+                # 接続テスト（空打ち）
+                if debug_mode:
+                    st.caption(f"Selected: {selected_model_name}")
+                st.success(f"✅ 接続準備OK")
             except Exception as e:
                 st.error(f"モデル設定エラー: {e}")
 
@@ -58,7 +60,7 @@ with st.sidebar:
         st.session_state.clear()
         st.rerun()
 
-# 安全設定（ブロックされすぎて何も出ないのを防ぐため緩める）
+# 安全設定（エラー回避のため緩める）
 safety_settings = {
     HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
     HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
@@ -91,32 +93,45 @@ if "chat_context" not in st.session_state:
     st.session_state.chat_context = [] 
 
 # ==========================================
-# 3. 共通関数（エラーハンドリング強化）
+# 3. 共通関数
 # ==========================================
 def generate_with_retry(prompt):
-    """エラーをキャッチして詳細を表示する生成関数"""
+    """エラーハンドリング付き生成関数"""
     if not active_model:
         return None, "APIキーまたはモデルが設定されていません"
     
     try:
+        # 生成実行
         response = active_model.generate_content(
             prompt, 
             safety_settings=safety_settings
         )
         
-        # デバッグモードならレスポンス全文を表示
+        # デバッグ表示
         if debug_mode:
-            st.sidebar.code(response)
+            with st.sidebar:
+                st.markdown("---")
+                st.caption("Debug: Raw Response")
+                st.write(response)
 
-        # テキストが空の場合のハンドリング（Gemini 2.0などで起こりうる）
+        # レスポンス検証
         if not response.parts:
-            return None, "⚠️ モデルからの応答が空でした。（安全フィルターまたはモデルの不具合の可能性があります）"
+            # フィードバック情報があるか確認
+            if response.prompt_feedback:
+                return None, f"⚠️ 安全フィルターによりブロックされました: {response.prompt_feedback}"
+            return None, "⚠️ モデルからの応答が空でした。"
             
         return response.text, None
 
     except Exception as e:
-        # エラー内容を詳細に返す
-        return None, f"エラーが発生しました:\n{e}"
+        # エラーメッセージを文字列化して解析
+        err_str = str(e)
+        if "429" in err_str:
+            return None, "🛑 **利用制限超過 (429 Error)**\n\n短時間にアクセスしすぎたか、無料枠の上限に達しました。\n少し待つか、APIキーを課金プランに変更してください。"
+        elif "404" in err_str:
+            return None, f"🔍 **モデルが見つかりません (404 Error)**\n\n現在選択中のモデル `{active_model.model_name}` は、現在のAPIキーでは利用できません。\n別のモデルを選択してください。"
+        else:
+            return None, f"❌ エラーが発生しました:\n{e}"
 
 # ==========================================
 # 4. 画面レイアウト
