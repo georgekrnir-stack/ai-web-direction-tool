@@ -7,7 +7,7 @@ import time
 # 1. 設定・準備
 # ==========================================
 st.set_page_config(page_title="AI Director Assistant", layout="wide")
-st.title("🚀 AI Web Direction Assistant (v8.0 Diag)")
+st.title("🚀 AI Web Direction Assistant (v8.1 Fixed)")
 
 # エラー表示エリア
 error_container = st.container()
@@ -16,7 +16,7 @@ error_container = st.container()
 with st.sidebar:
     st.header("⚙️ 設定")
     
-    # APIキー入力（パスワード形式）
+    # APIキー入力
     api_key = st.text_input("Gemini API Key", type="password")
     
     # モデル選択用変数の初期化
@@ -36,14 +36,10 @@ with st.sidebar:
         if st.button("📡 接続テスト（利用可能なモデルを取得）"):
             with st.spinner("Googleのサーバーに問い合わせ中..."):
                 try:
-                    # APIキーで利用可能なモデル一覧を取得
                     models = genai.list_models()
-                    
-                    # generateContentメソッドが使えるモデルだけを抽出
                     fetched_models = []
                     for m in models:
                         if 'generateContent' in m.supported_generation_methods:
-                            # models/gemini-1.5-flash のような形式から models/ を削除して扱いやすくする
                             clean_name = m.name.replace("models/", "")
                             fetched_models.append(clean_name)
                     
@@ -51,12 +47,12 @@ with st.sidebar:
                         st.session_state.available_models = sorted(fetched_models)
                         st.success(f"✅ 成功！ {len(fetched_models)}個のモデルが見つかりました。")
                     else:
-                        st.error("⚠️ 接続はできましたが、利用可能なモデルが0個でした。APIキーの権限を確認してください。")
+                        st.error("⚠️ 接続はできましたが、利用可能なモデルが0個でした。")
                         
                 except Exception as e:
-                    st.error(f"❌ 接続エラー: {e}\n\nAPIキーが正しいか、課金プロジェクトと紐付いているか確認してください。")
+                    st.error(f"❌ 接続エラー: {e}")
 
-        # モデル選択ボックス（取得したリストを反映）
+        # モデル選択ボックス
         st.markdown("### 🤖 モデル選択")
         selected_model_name = st.selectbox(
             "使用モデル", 
@@ -119,7 +115,6 @@ if "chat_context" not in st.session_state:
 # 3. 共通関数
 # ==========================================
 def generate_with_retry(prompt):
-    """エラーハンドリング付き生成関数"""
     if not active_model:
         return None, "APIキーまたはモデルが設定されていません"
     
@@ -163,6 +158,7 @@ with left_col:
     st.caption("▼ プロジェクト定義書（確定情報）")
     tab_conf_view, tab_conf_edit = st.tabs(["👀 プレビュー", "✏️ 編集"])
     with tab_conf_edit:
+        # input_confirmed というキーで管理されている
         new_confirmed = st.text_area("確定情報エディタ", value=st.session_state.confirmed, height=300, key="input_confirmed", label_visibility="collapsed")
         st.session_state.confirmed = new_confirmed
     with tab_conf_view:
@@ -173,6 +169,7 @@ with left_col:
     st.caption("▼ Todo・未定リスト")
     tab_pend_view, tab_pend_edit = st.tabs(["👀 プレビュー", "✏️ 編集"])
     with tab_pend_edit:
+        # input_pending というキーで管理されている
         new_pending = st.text_area("未定事項エディタ", value=st.session_state.pending, height=200, key="input_pending", label_visibility="collapsed")
         st.session_state.pending = new_pending
     with tab_pend_view:
@@ -201,12 +198,22 @@ with right_col:
                 if error:
                     error_container.error(error)
                 elif text:
+                    conf_val = ""
+                    pend_val = ""
+                    
                     if "===SECTION2===" in text:
                         parts = text.split("===SECTION2===")
-                        st.session_state.confirmed = parts[0].replace("===SECTION1===", "").strip()
-                        st.session_state.pending = parts[1].strip()
+                        conf_val = parts[0].replace("===SECTION1===", "").strip()
+                        pend_val = parts[1].strip()
                     else:
-                        st.session_state.confirmed = text
+                        conf_val = text
+                        pend_val = st.session_state.pending # 変更なし
+                    
+                    # 【重要修正】セッション変数だけでなく、入力ウィジェットのキーも強制更新する
+                    st.session_state.confirmed = conf_val
+                    st.session_state.pending = pend_val
+                    st.session_state["input_confirmed"] = conf_val
+                    st.session_state["input_pending"] = pend_val
                     
                     st.success("反映しました！")
                     time.sleep(1)
@@ -263,8 +270,14 @@ with right_col:
             
             if st.button("↑ 反映する", type="primary"):
                 clean_conf = st.session_state.tool_b_result_conf.replace("★", "").replace("**★", "**")
+                pend_val = st.session_state.tool_b_result_pend
+                
+                # 【重要修正】ここでもウィジェットのキーを強制更新
                 st.session_state.confirmed = clean_conf
-                st.session_state.pending = st.session_state.tool_b_result_pend
+                st.session_state.pending = pend_val
+                st.session_state["input_confirmed"] = clean_conf
+                st.session_state["input_pending"] = pend_val
+                
                 st.session_state.tool_b_result_conf = ""
                 st.session_state.tool_b_result_pend = ""
                 st.success("反映完了！")
