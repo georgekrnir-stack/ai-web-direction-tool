@@ -7,7 +7,7 @@ import time
 # 1. 設定・準備
 # ==========================================
 st.set_page_config(page_title="AI Director Assistant", layout="wide")
-st.title("🚀 AI Web Direction Assistant (v8.1 Fixed)")
+st.title("🚀 AI Web Direction Assistant (v9.0 Stable)")
 
 # エラー表示エリア
 error_container = st.container()
@@ -16,25 +16,29 @@ error_container = st.container()
 with st.sidebar:
     st.header("⚙️ 設定")
     
-    # APIキー入力
     api_key = st.text_input("Gemini API Key", type="password")
     
-    # モデル選択用変数の初期化
+    # 利用可能なモデルリスト（自動取得できない場合のフォールバック）
+    default_models = [
+        "gemini-1.5-flash", 
+        "gemini-1.5-pro", 
+        "gemini-1.5-flash-001",
+        "gemini-1.5-pro-001",
+        "gemini-2.0-flash-exp",
+        "gemini-pro"
+    ]
+    
     if "available_models" not in st.session_state:
-        st.session_state.available_models = [
-            "gemini-1.5-flash", 
-            "gemini-1.5-pro", 
-            "gemini-1.0-pro"
-        ]
+        st.session_state.available_models = default_models
     
     active_model = None
     
     if api_key:
         genai.configure(api_key=api_key)
         
-        # --- 接続テストボタン ---
+        # 接続テストボタン
         if st.button("📡 接続テスト（利用可能なモデルを取得）"):
-            with st.spinner("Googleのサーバーに問い合わせ中..."):
+            with st.spinner("サーバーに問い合わせ中..."):
                 try:
                     models = genai.list_models()
                     fetched_models = []
@@ -44,15 +48,17 @@ with st.sidebar:
                             fetched_models.append(clean_name)
                     
                     if fetched_models:
-                        st.session_state.available_models = sorted(fetched_models)
+                        # 取得できたリストとデフォルトをマージして重複削除
+                        merged = sorted(list(set(fetched_models + default_models)))
+                        st.session_state.available_models = merged
                         st.success(f"✅ 成功！ {len(fetched_models)}個のモデルが見つかりました。")
                     else:
-                        st.error("⚠️ 接続はできましたが、利用可能なモデルが0個でした。")
+                        st.warning("⚠️ モデルリストが取得できませんでしたが、手動選択は可能です。")
                         
                 except Exception as e:
                     st.error(f"❌ 接続エラー: {e}")
 
-        # モデル選択ボックス
+        # モデル選択
         st.markdown("### 🤖 モデル選択")
         selected_model_name = st.selectbox(
             "使用モデル", 
@@ -88,7 +94,7 @@ safety_settings = {
 }
 
 # ==========================================
-# 2. 状態管理
+# 2. 状態管理（動的キー管理を追加）
 # ==========================================
 if "confirmed" not in st.session_state:
     st.session_state.confirmed = """### 【基本情報】
@@ -102,10 +108,17 @@ if "confirmed" not in st.session_state:
 ### 【要件（予算・納期）】
 - 
 """
+# テキストエリアを強制リフレッシュするためのバージョン番号
+if "confirmed_version" not in st.session_state:
+    st.session_state.confirmed_version = 0
+
 if "pending" not in st.session_state:
     st.session_state.pending = """### 【次回確認事項】
 - 
 """
+if "pending_version" not in st.session_state:
+    st.session_state.pending_version = 0
+
 if "chat_history" not in st.session_state:
     st.session_state.chat_history = [] 
 if "chat_context" not in st.session_state:
@@ -157,10 +170,20 @@ with left_col:
     
     st.caption("▼ プロジェクト定義書（確定情報）")
     tab_conf_view, tab_conf_edit = st.tabs(["👀 プレビュー", "✏️ 編集"])
+    
     with tab_conf_edit:
-        # input_confirmed というキーで管理されている
-        new_confirmed = st.text_area("確定情報エディタ", value=st.session_state.confirmed, height=300, key="input_confirmed", label_visibility="collapsed")
+        # 動的キーを使用（バージョンが変わると新しいウィジェットとして生成される）
+        conf_key = f"confirmed_area_{st.session_state.confirmed_version}"
+        new_confirmed = st.text_area(
+            "確定情報エディタ", 
+            value=st.session_state.confirmed, 
+            height=300, 
+            key=conf_key, 
+            label_visibility="collapsed"
+        )
+        # 手動編集の内容を即座に保存
         st.session_state.confirmed = new_confirmed
+        
     with tab_conf_view:
         st.markdown(st.session_state.confirmed)
 
@@ -168,10 +191,18 @@ with left_col:
 
     st.caption("▼ Todo・未定リスト")
     tab_pend_view, tab_pend_edit = st.tabs(["👀 プレビュー", "✏️ 編集"])
+    
     with tab_pend_edit:
-        # input_pending というキーで管理されている
-        new_pending = st.text_area("未定事項エディタ", value=st.session_state.pending, height=200, key="input_pending", label_visibility="collapsed")
+        pend_key = f"pending_area_{st.session_state.pending_version}"
+        new_pending = st.text_area(
+            "未定事項エディタ", 
+            value=st.session_state.pending, 
+            height=200, 
+            key=pend_key, 
+            label_visibility="collapsed"
+        )
         st.session_state.pending = new_pending
+        
     with tab_pend_view:
         st.markdown(st.session_state.pending)
 
@@ -198,25 +229,19 @@ with right_col:
                 if error:
                     error_container.error(error)
                 elif text:
-                    conf_val = ""
-                    pend_val = ""
-                    
                     if "===SECTION2===" in text:
                         parts = text.split("===SECTION2===")
-                        conf_val = parts[0].replace("===SECTION1===", "").strip()
-                        pend_val = parts[1].strip()
+                        st.session_state.confirmed = parts[0].replace("===SECTION1===", "").strip()
+                        st.session_state.pending = parts[1].strip()
                     else:
-                        conf_val = text
-                        pend_val = st.session_state.pending # 変更なし
+                        st.session_state.confirmed = text
                     
-                    # 【重要修正】セッション変数だけでなく、入力ウィジェットのキーも強制更新する
-                    st.session_state.confirmed = conf_val
-                    st.session_state.pending = pend_val
-                    st.session_state["input_confirmed"] = conf_val
-                    st.session_state["input_pending"] = pend_val
+                    # バージョンを上げて、強制的にテキストエリアをリフレッシュさせる
+                    st.session_state.confirmed_version += 1
+                    st.session_state.pending_version += 1
                     
                     st.success("反映しました！")
-                    time.sleep(1)
+                    time.sleep(0.5)
                     st.rerun()
 
     # --- Tab 2: 会議サポート ---
@@ -270,18 +295,18 @@ with right_col:
             
             if st.button("↑ 反映する", type="primary"):
                 clean_conf = st.session_state.tool_b_result_conf.replace("★", "").replace("**★", "**")
-                pend_val = st.session_state.tool_b_result_pend
                 
-                # 【重要修正】ここでもウィジェットのキーを強制更新
                 st.session_state.confirmed = clean_conf
-                st.session_state.pending = pend_val
-                st.session_state["input_confirmed"] = clean_conf
-                st.session_state["input_pending"] = pend_val
+                st.session_state.pending = st.session_state.tool_b_result_pend
+                
+                # バージョンアップ（強制リフレッシュ）
+                st.session_state.confirmed_version += 1
+                st.session_state.pending_version += 1
                 
                 st.session_state.tool_b_result_conf = ""
                 st.session_state.tool_b_result_pend = ""
                 st.success("反映完了！")
-                time.sleep(1)
+                time.sleep(0.5)
                 st.rerun()
 
     # --- Tab 3: 最終出力 ---
