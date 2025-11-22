@@ -7,7 +7,7 @@ import time
 # 1. 設定・準備
 # ==========================================
 st.set_page_config(page_title="AI Director Assistant", layout="wide")
-st.title("🚀 AI Web Direction Assistant (v6.4)")
+st.title("🚀 AI Web Direction Assistant (v7.0 Stable)")
 
 # エラー表示エリア
 error_container = st.container()
@@ -18,45 +18,35 @@ with st.sidebar:
     api_key = st.text_input("Gemini API Key", type="password")
     
     active_model = None
-    selected_model_name = None
-
+    
     if api_key:
         genai.configure(api_key=api_key)
         
-        # 1. 使えるモデルのリストを取得してみる
-        model_options = []
-        try:
-            for m in genai.list_models():
-                if 'generateContent' in m.supported_generation_methods:
-                    model_options.append(m.name)
-        except Exception as e:
-            # 取得失敗時はエラーを出さずにデフォルトリストを使う
-            pass
-
-        # 2. デフォルトの候補リスト（取得できなかった場合や、漏れがある場合用）
-        default_candidates = [
-            "models/gemini-1.5-flash",
-            "models/gemini-1.5-flash-001",
-            "models/gemini-1.5-pro",
-            "models/gemini-1.5-pro-001",
-            "models/gemini-pro",
-            "gemini-1.5-flash",
-            "gemini-pro"
+        # 最新の安定稼働モデルリスト（2025年最新）
+        # ※自動取得ではなく、確実に存在するIDを指定します
+        model_options = [
+            "gemini-1.5-flash",          # 最も推奨（高速・安価）
+            "gemini-1.5-pro",            # 高精度
+            "gemini-2.0-flash-exp",      # 最新プレビュー（動かない場合あり）
+            "gemini-1.5-flash-002",      # Flashのアップデート版
+            "gemini-1.5-pro-002",        # Proのアップデート版
         ]
         
-        # リストを結合して重複削除（セットにしてリストに戻す）
-        final_options = sorted(list(set(model_options + default_candidates)))
-        
-        # 3. セレクトボックスを表示
         st.markdown("### 🤖 モデル選択")
-        st.caption("※エラーが出る場合はここを変更してください")
-        selected_model_name = st.selectbox("使用モデル", final_options, index=0)
+        selected_model_name = st.selectbox(
+            "使用モデル", 
+            model_options, 
+            index=0,
+            help="404エラーが出る場合は別のモデルを試してください"
+        )
         
-        # 接続テスト
+        # デバッグモード（何も出ない時用）
+        debug_mode = st.checkbox("デバッグモード（生ログ表示）", value=False)
+
         if selected_model_name:
             try:
                 active_model = genai.GenerativeModel(selected_model_name)
-                st.success(f"✅ 接続準備OK")
+                st.success(f"✅ 選択中: {selected_model_name}")
             except Exception as e:
                 st.error(f"モデル設定エラー: {e}")
 
@@ -68,7 +58,13 @@ with st.sidebar:
         st.session_state.clear()
         st.rerun()
 
-safety_settings = {HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE}
+# 安全設定（ブロックされすぎて何も出ないのを防ぐため緩める）
+safety_settings = {
+    HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
+    HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
+    HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
+    HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
+}
 
 # ==========================================
 # 2. 状態管理
@@ -95,7 +91,35 @@ if "chat_context" not in st.session_state:
     st.session_state.chat_context = [] 
 
 # ==========================================
-# 3. 画面レイアウト
+# 3. 共通関数（エラーハンドリング強化）
+# ==========================================
+def generate_with_retry(prompt):
+    """エラーをキャッチして詳細を表示する生成関数"""
+    if not active_model:
+        return None, "APIキーまたはモデルが設定されていません"
+    
+    try:
+        response = active_model.generate_content(
+            prompt, 
+            safety_settings=safety_settings
+        )
+        
+        # デバッグモードならレスポンス全文を表示
+        if debug_mode:
+            st.sidebar.code(response)
+
+        # テキストが空の場合のハンドリング（Gemini 2.0などで起こりうる）
+        if not response.parts:
+            return None, "⚠️ モデルからの応答が空でした。（安全フィルターまたはモデルの不具合の可能性があります）"
+            
+        return response.text, None
+
+    except Exception as e:
+        # エラー内容を詳細に返す
+        return None, f"エラーが発生しました:\n{e}"
+
+# ==========================================
+# 4. 画面レイアウト
 # ==========================================
 left_col, right_col = st.columns([1, 1])
 
@@ -132,31 +156,28 @@ with right_col:
         st.write("メモから情報を整理します")
         tool_a_input = st.text_area("メモを入力", height=100)
         if st.button("分析実行", key="btn_a"):
-            if not active_model:
-                error_container.error("⚠️ APIキー設定またはモデル選択を確認してください")
-            else:
-                with st.spinner("分析中..."):
-                    try:
-                        prompt = f"""
-                        あなたはWebディレクターです。以下のメモを【基本情報】と【戦略・質問リスト】に分けて整理してください。
-                        見出しには `###` 、重要な箇所には `**太字**` を使い、箇条書き `- ` で読みやすく整形してください。
-                        メモ: {tool_a_input}
-                        出力形式: ===SECTION1=== (基本情報) ===SECTION2=== (戦略)
-                        """
-                        res = active_model.generate_content(prompt, safety_settings=safety_settings)
-                        
-                        if "===SECTION2===" in res.text:
-                            parts = res.text.split("===SECTION2===")
-                            st.session_state.confirmed = parts[0].replace("===SECTION1===", "").strip()
-                            st.session_state.pending = parts[1].strip()
-                        else:
-                            st.session_state.confirmed = res.text
-                        
-                        st.success("反映しました！")
-                        time.sleep(1)
-                        st.rerun()
-                    except Exception as e:
-                        error_container.error(f"エラーが発生しました:\n{e}")
+            with st.spinner("分析中..."):
+                prompt = f"""
+                あなたはWebディレクターです。以下のメモを【基本情報】と【戦略・質問リスト】に分けて整理してください。
+                見出しには `###` 、重要な箇所には `**太字**` を使い、箇条書き `- ` で読みやすく整形してください。
+                メモ: {tool_a_input}
+                出力形式: ===SECTION1=== (基本情報) ===SECTION2=== (戦略)
+                """
+                text, error = generate_with_retry(prompt)
+                
+                if error:
+                    error_container.error(error)
+                elif text:
+                    if "===SECTION2===" in text:
+                        parts = text.split("===SECTION2===")
+                        st.session_state.confirmed = parts[0].replace("===SECTION1===", "").strip()
+                        st.session_state.pending = parts[1].strip()
+                    else:
+                        st.session_state.confirmed = text
+                    
+                    st.success("反映しました！")
+                    time.sleep(1)
+                    st.rerun()
 
     # --- Tab 2: 会議サポート ---
     with tab2:
@@ -169,31 +190,29 @@ with right_col:
             st.session_state.tool_b_result_pend = ""
 
         if st.button("AI実行", key="btn_b"):
-            if not active_model:
-                error_container.error("⚠️ APIキー設定またはモデル選択を確認してください")
-            else:
-                with st.spinner("分析中..."):
-                    try:
-                        instruction = "未定事項を更新してください" if tool_b_mode == 'ヒアリング漏れチェック' else "合意事項を抽出してください"
-                        prompt = f"""
-                        【確定情報】{st.session_state.confirmed}
-                        【未定情報】{st.session_state.pending}
-                        【ログ】{tool_b_input}
-                        指示:{instruction}
-                        ルール:
-                        1. 確定情報の追記箇所には `★` をつけ、その行を `**太字**` にしてください。
-                        2. 見出しや箇条書きを使い、Markdown形式で読みやすく整理してください。
-                        出力形式: ===CONFIRMED=== (内容) ===PENDING=== (内容)
-                        """
-                        res = active_model.generate_content(prompt, safety_settings=safety_settings)
-                        if "===PENDING===" in res.text:
-                            parts = res.text.split("===PENDING===")
-                            st.session_state.tool_b_result_conf = parts[0].replace("===CONFIRMED===", "").strip()
-                            st.session_state.tool_b_result_pend = parts[1].strip()
-                        else:
-                            st.session_state.tool_b_result_conf = res.text
-                    except Exception as e:
-                        error_container.error(f"エラーが発生しました:\n{e}")
+            with st.spinner("分析中..."):
+                instruction = "未定事項を更新してください" if tool_b_mode == 'ヒアリング漏れチェック' else "合意事項を抽出してください"
+                prompt = f"""
+                【確定情報】{st.session_state.confirmed}
+                【未定情報】{st.session_state.pending}
+                【ログ】{tool_b_input}
+                指示:{instruction}
+                ルール:
+                1. 確定情報の追記箇所には `★` をつけ、その行を `**太字**` にしてください。
+                2. 見出しや箇条書きを使い、Markdown形式で読みやすく整理してください。
+                出力形式: ===CONFIRMED=== (内容) ===PENDING=== (内容)
+                """
+                text, error = generate_with_retry(prompt)
+                
+                if error:
+                    error_container.error(error)
+                elif text:
+                    if "===PENDING===" in text:
+                        parts = text.split("===PENDING===")
+                        st.session_state.tool_b_result_conf = parts[0].replace("===CONFIRMED===", "").strip()
+                        st.session_state.tool_b_result_pend = parts[1].strip()
+                    else:
+                        st.session_state.tool_b_result_conf = text
 
         if st.session_state.tool_b_result_conf:
             st.info("▼ 更新案（プレビューで確認できます）")
@@ -222,16 +241,13 @@ with right_col:
     # --- Tab 3: 最終出力 ---
     with tab3:
         if st.button("指示書を出力", type="primary", key="btn_c"):
-             if not active_model:
-                error_container.error("⚠️ APIキー設定またはモデル選択を確認してください")
-             else:
-                with st.spinner("作成中..."):
-                    try:
-                        prompt = f"あなたはシニアディレクターです。以下の情報から制作指示書を作成してください。Markdownで見やすく整形してください。\n{st.session_state.confirmed}"
-                        res = active_model.generate_content(prompt, safety_settings=safety_settings)
-                        st.markdown(res.text)
-                    except Exception as e:
-                        error_container.error(f"エラーが発生しました:\n{e}")
+             with st.spinner("作成中..."):
+                prompt = f"あなたはシニアディレクターです。以下の情報から制作指示書を作成してください。Markdownで見やすく整形してください。\n{st.session_state.confirmed}"
+                text, error = generate_with_retry(prompt)
+                if error:
+                    error_container.error(error)
+                elif text:
+                    st.markdown(text)
 
     # --- Tab 4: 壁打ちチャット ---
     with tab4:
@@ -243,37 +259,32 @@ with right_col:
                     st.markdown(msg["text"])
 
         if user_input := st.chat_input("質問を入力..."):
-            if not active_model:
-                error_container.error("⚠️ APIキー設定またはモデル選択を確認してください")
-            else:
-                st.session_state.chat_history.append({"role": "user", "text": user_input})
-                with chat_container:
-                    with st.chat_message("user"):
-                        st.markdown(user_input)
-                
-                st.session_state.chat_context.append(f"User: {user_input}")
-                history_text = "\n".join(st.session_state.chat_context[-5:])
+            st.session_state.chat_history.append({"role": "user", "text": user_input})
+            with chat_container:
+                with st.chat_message("user"):
+                    st.markdown(user_input)
+            
+            st.session_state.chat_context.append(f"User: {user_input}")
+            history_text = "\n".join(st.session_state.chat_context[-5:])
 
-                try:
-                    prompt = f"""
-                    あなたはWeb制作のアドバイザーです。
-                    【プロジェクト状況】{st.session_state.confirmed}
-                    【未定事項】{st.session_state.pending}
-                    【履歴】{history_text}
-                    ユーザー: {user_input}
-                    """
-                    
-                    with chat_container:
-                        with st.chat_message("assistant"):
-                            with st.spinner("思考中..."):
-                                res = active_model.generate_content(prompt, safety_settings=safety_settings)
-                                ai_resp = res.text
-                                st.markdown(ai_resp)
-                    
-                    st.session_state.chat_history.append({"role": "assistant", "text": ai_resp})
-                    st.session_state.chat_context.append(f"AI: {ai_resp}")
-                
-                except Exception as e:
-                    error_msg = f"エラーが発生しました: {e}"
-                    error_container.error(error_msg)
-                    st.session_state.chat_history.append({"role": "assistant", "text": f"⚠️ {error_msg}"})
+            prompt = f"""
+            あなたはWeb制作のアドバイザーです。
+            【プロジェクト状況】{st.session_state.confirmed}
+            【未定事項】{st.session_state.pending}
+            【履歴】{history_text}
+            ユーザー: {user_input}
+            """
+            
+            with chat_container:
+                with st.chat_message("assistant"):
+                    with st.spinner("思考中..."):
+                        text, error = generate_with_retry(prompt)
+                        if error:
+                            st.error(error)
+                            ai_resp = f"⚠️ エラー: {error}"
+                        else:
+                            ai_resp = text
+                            st.markdown(ai_resp)
+            
+            st.session_state.chat_history.append({"role": "assistant", "text": ai_resp})
+            st.session_state.chat_context.append(f"AI: {ai_resp}")
