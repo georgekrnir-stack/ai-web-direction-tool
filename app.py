@@ -7,16 +7,10 @@ import time
 # 1. 設定・準備
 # ==========================================
 st.set_page_config(page_title="AI Director Assistant", layout="wide")
-st.title("🚀 AI Web Direction Assistant (v6.3)")
+st.title("🚀 AI Web Direction Assistant (v6.4)")
 
-# --- エラー表示用のコンテナ（画面最上部に固定） ---
+# エラー表示エリア
 error_container = st.container()
-
-# --- モデル設定（軽量化：リスト取得を廃止） ---
-def get_model_simple(api_key):
-    genai.configure(api_key=api_key)
-    # 一番安定しているFlashモデルを固定で使用
-    return genai.GenerativeModel('gemini-1.5-flash')
 
 # サイドバー
 with st.sidebar:
@@ -24,9 +18,48 @@ with st.sidebar:
     api_key = st.text_input("Gemini API Key", type="password")
     
     active_model = None
+    selected_model_name = None
+
     if api_key:
-        active_model = get_model_simple(api_key)
-        st.success("✅ 接続準備OK (Gemini 1.5 Flash)")
+        genai.configure(api_key=api_key)
+        
+        # 1. 使えるモデルのリストを取得してみる
+        model_options = []
+        try:
+            for m in genai.list_models():
+                if 'generateContent' in m.supported_generation_methods:
+                    model_options.append(m.name)
+        except Exception as e:
+            # 取得失敗時はエラーを出さずにデフォルトリストを使う
+            pass
+
+        # 2. デフォルトの候補リスト（取得できなかった場合や、漏れがある場合用）
+        default_candidates = [
+            "models/gemini-1.5-flash",
+            "models/gemini-1.5-flash-001",
+            "models/gemini-1.5-pro",
+            "models/gemini-1.5-pro-001",
+            "models/gemini-pro",
+            "gemini-1.5-flash",
+            "gemini-pro"
+        ]
+        
+        # リストを結合して重複削除（セットにしてリストに戻す）
+        final_options = sorted(list(set(model_options + default_candidates)))
+        
+        # 3. セレクトボックスを表示
+        st.markdown("### 🤖 モデル選択")
+        st.caption("※エラーが出る場合はここを変更してください")
+        selected_model_name = st.selectbox("使用モデル", final_options, index=0)
+        
+        # 接続テスト
+        if selected_model_name:
+            try:
+                active_model = genai.GenerativeModel(selected_model_name)
+                st.success(f"✅ 接続準備OK")
+            except Exception as e:
+                st.error(f"モデル設定エラー: {e}")
+
     else:
         st.warning("APIキーを入力してください")
 
@@ -100,7 +133,7 @@ with right_col:
         tool_a_input = st.text_area("メモを入力", height=100)
         if st.button("分析実行", key="btn_a"):
             if not active_model:
-                error_container.error("⚠️ APIキーが設定されていません")
+                error_container.error("⚠️ APIキー設定またはモデル選択を確認してください")
             else:
                 with st.spinner("分析中..."):
                     try:
@@ -120,7 +153,7 @@ with right_col:
                             st.session_state.confirmed = res.text
                         
                         st.success("反映しました！")
-                        time.sleep(1) # 成功メッセージを見せるため少し待つ
+                        time.sleep(1)
                         st.rerun()
                     except Exception as e:
                         error_container.error(f"エラーが発生しました:\n{e}")
@@ -137,7 +170,7 @@ with right_col:
 
         if st.button("AI実行", key="btn_b"):
             if not active_model:
-                error_container.error("⚠️ APIキーが設定されていません")
+                error_container.error("⚠️ APIキー設定またはモデル選択を確認してください")
             else:
                 with st.spinner("分析中..."):
                     try:
@@ -190,7 +223,7 @@ with right_col:
     with tab3:
         if st.button("指示書を出力", type="primary", key="btn_c"):
              if not active_model:
-                error_container.error("⚠️ APIキーが設定されていません")
+                error_container.error("⚠️ APIキー設定またはモデル選択を確認してください")
              else:
                 with st.spinner("作成中..."):
                     try:
@@ -211,9 +244,8 @@ with right_col:
 
         if user_input := st.chat_input("質問を入力..."):
             if not active_model:
-                error_container.error("⚠️ APIキーが設定されていません")
+                error_container.error("⚠️ APIキー設定またはモデル選択を確認してください")
             else:
-                # ユーザーの入力を即座に表示
                 st.session_state.chat_history.append({"role": "user", "text": user_input})
                 with chat_container:
                     with st.chat_message("user"):
@@ -231,7 +263,6 @@ with right_col:
                     ユーザー: {user_input}
                     """
                     
-                    # 読み込み中表示
                     with chat_container:
                         with st.chat_message("assistant"):
                             with st.spinner("思考中..."):
@@ -239,12 +270,10 @@ with right_col:
                                 ai_resp = res.text
                                 st.markdown(ai_resp)
                     
-                    # 履歴に追加
                     st.session_state.chat_history.append({"role": "assistant", "text": ai_resp})
                     st.session_state.chat_context.append(f"AI: {ai_resp}")
                 
                 except Exception as e:
                     error_msg = f"エラーが発生しました: {e}"
                     error_container.error(error_msg)
-                    # チャット欄にもエラーを残す
                     st.session_state.chat_history.append({"role": "assistant", "text": f"⚠️ {error_msg}"})
