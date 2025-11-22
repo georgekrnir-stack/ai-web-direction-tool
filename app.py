@@ -7,7 +7,7 @@ import time
 # 1. 設定・準備
 # ==========================================
 st.set_page_config(page_title="AI Director Assistant", layout="wide")
-st.title("🚀 AI Web Direction Assistant (v7.1 Final)")
+st.title("🚀 AI Web Direction Assistant (v8.0 Diag)")
 
 # エラー表示エリア
 error_container = st.container()
@@ -15,28 +15,53 @@ error_container = st.container()
 # サイドバー
 with st.sidebar:
     st.header("⚙️ 設定")
+    
+    # APIキー入力（パスワード形式）
     api_key = st.text_input("Gemini API Key", type="password")
+    
+    # モデル選択用変数の初期化
+    if "available_models" not in st.session_state:
+        st.session_state.available_models = [
+            "gemini-1.5-flash", 
+            "gemini-1.5-pro", 
+            "gemini-1.0-pro"
+        ]
     
     active_model = None
     
     if api_key:
         genai.configure(api_key=api_key)
         
-        # 【修正点】最も安定して動くモデル名のみを厳選
-        # models/ という接頭辞なしのエイリアスを使用するのがSDKの推奨です
-        model_options = [
-            "gemini-1.5-flash",          # 最速・最安・推奨
-            "gemini-1.5-flash-latest",   # 常に最新のFlash
-            "gemini-1.5-pro",            # 高精度
-            "gemini-1.5-pro-latest",     # 常に最新のPro
-        ]
-        
+        # --- 接続テストボタン ---
+        if st.button("📡 接続テスト（利用可能なモデルを取得）"):
+            with st.spinner("Googleのサーバーに問い合わせ中..."):
+                try:
+                    # APIキーで利用可能なモデル一覧を取得
+                    models = genai.list_models()
+                    
+                    # generateContentメソッドが使えるモデルだけを抽出
+                    fetched_models = []
+                    for m in models:
+                        if 'generateContent' in m.supported_generation_methods:
+                            # models/gemini-1.5-flash のような形式から models/ を削除して扱いやすくする
+                            clean_name = m.name.replace("models/", "")
+                            fetched_models.append(clean_name)
+                    
+                    if fetched_models:
+                        st.session_state.available_models = sorted(fetched_models)
+                        st.success(f"✅ 成功！ {len(fetched_models)}個のモデルが見つかりました。")
+                    else:
+                        st.error("⚠️ 接続はできましたが、利用可能なモデルが0個でした。APIキーの権限を確認してください。")
+                        
+                except Exception as e:
+                    st.error(f"❌ 接続エラー: {e}\n\nAPIキーが正しいか、課金プロジェクトと紐付いているか確認してください。")
+
+        # モデル選択ボックス（取得したリストを反映）
         st.markdown("### 🤖 モデル選択")
         selected_model_name = st.selectbox(
             "使用モデル", 
-            model_options, 
-            index=0,
-            help="課金設定済みのアカウントであれば gemini-1.5-flash が最も安定します"
+            st.session_state.available_models,
+            index=0
         )
         
         # デバッグモード
@@ -45,10 +70,8 @@ with st.sidebar:
         if selected_model_name:
             try:
                 active_model = genai.GenerativeModel(selected_model_name)
-                # 接続テスト（空打ち）
                 if debug_mode:
-                    st.caption(f"Selected: {selected_model_name}")
-                st.success(f"✅ 接続準備OK")
+                    st.caption(f"Active: {selected_model_name}")
             except Exception as e:
                 st.error(f"モデル設定エラー: {e}")
 
@@ -60,7 +83,7 @@ with st.sidebar:
         st.session_state.clear()
         st.rerun()
 
-# 安全設定（エラー回避のため緩める）
+# 安全設定
 safety_settings = {
     HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
     HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
@@ -101,22 +124,18 @@ def generate_with_retry(prompt):
         return None, "APIキーまたはモデルが設定されていません"
     
     try:
-        # 生成実行
         response = active_model.generate_content(
             prompt, 
             safety_settings=safety_settings
         )
         
-        # デバッグ表示
         if debug_mode:
             with st.sidebar:
                 st.markdown("---")
                 st.caption("Debug: Raw Response")
                 st.write(response)
 
-        # レスポンス検証
         if not response.parts:
-            # フィードバック情報があるか確認
             if response.prompt_feedback:
                 return None, f"⚠️ 安全フィルターによりブロックされました: {response.prompt_feedback}"
             return None, "⚠️ モデルからの応答が空でした。"
@@ -124,12 +143,11 @@ def generate_with_retry(prompt):
         return response.text, None
 
     except Exception as e:
-        # エラーメッセージを文字列化して解析
         err_str = str(e)
         if "429" in err_str:
-            return None, "🛑 **利用制限超過 (429 Error)**\n\n短時間にアクセスしすぎたか、無料枠の上限に達しました。\n少し待つか、APIキーを課金プランに変更してください。"
+            return None, "🛑 **利用制限超過 (429 Error)**\n\nアクセス過多です。少し待ってから再試行してください。"
         elif "404" in err_str:
-            return None, f"🔍 **モデルが見つかりません (404 Error)**\n\n現在選択中のモデル `{active_model.model_name}` は、現在のAPIキーでは利用できません。\n別のモデルを選択してください。"
+            return None, f"🔍 **モデルが見つかりません (404 Error)**\n\n選択中のモデル `{active_model.model_name}` は現在利用できません。\nサイドバーの「接続テスト」ボタンを押して、確実なリストを再取得してください。"
         else:
             return None, f"❌ エラーが発生しました:\n{e}"
 
