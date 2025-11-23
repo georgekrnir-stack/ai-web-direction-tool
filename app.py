@@ -8,7 +8,7 @@ import datetime
 # 1. 設定・準備
 # ==========================================
 st.set_page_config(page_title="AI Director Assistant", layout="wide")
-st.title("🚀 AI Web Direction Assistant (v13.0 Multi-Task)")
+st.title("🚀 AI Web Direction Assistant (v13.1 Summary Enhanced)")
 
 # エラー表示エリア
 error_container = st.container()
@@ -81,8 +81,8 @@ if "meeting_support_history" not in st.session_state:
     st.session_state.meeting_support_history = []
 
 # 打ち合わせ後まとめの出力一時保存
-if "post_meeting_result" not in st.session_state:
-    st.session_state.post_meeting_result = ""
+if "post_meeting_conf" not in st.session_state: st.session_state.post_meeting_conf = ""
+if "post_meeting_pend" not in st.session_state: st.session_state.post_meeting_pend = ""
 
 if "chat_history" not in st.session_state: st.session_state.chat_history = [] 
 if "chat_context" not in st.session_state: st.session_state.chat_context = [] 
@@ -133,7 +133,6 @@ with left_col:
 with right_col:
     st.subheader("🛠️ AIツール")
     
-    # タブ構成の変更
     tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "📨 事前分析", 
         "🗣️ 会議サポート", 
@@ -169,7 +168,7 @@ with right_col:
                     st.rerun()
                 elif error: error_container.error(error)
 
-    # --- Tab 2: 会議サポート（チェックボックス式・履歴蓄積型） ---
+    # --- Tab 2: 会議サポート ---
     with tab2:
         st.markdown("### 🗣️ 会議サポート")
         st.caption(f"使用モデル: `{model_high_speed}` (高速)")
@@ -184,19 +183,16 @@ with right_col:
         check_proposal = st.checkbox("これまでの打ち合わせ内容から提案内容を作成")
 
         if st.button("AI実行", key="btn_b"):
-            # 入力チェック
             if not new_log_input and not st.session_state.full_transcript:
                 st.warning("ログがありません。入力してください。")
             elif not (check_summary or check_issues or check_leak or check_proposal):
                 st.warning("タスクを少なくとも1つ選択してください。")
             else:
-                # ログの統合
                 current_full_log = st.session_state.full_transcript
                 if new_log_input:
                     current_full_log += "\n" + new_log_input
-                    st.session_state.full_transcript = current_full_log # 保存
+                    st.session_state.full_transcript = current_full_log 
                 
-                # プロンプト作成
                 tasks_instruction = ""
                 if check_summary: tasks_instruction += "- 今回の打ち合わせ内容の要約\n"
                 if check_issues: tasks_instruction += "- 現状の発言における矛盾点や懸念される問題点\n"
@@ -207,14 +203,9 @@ with right_col:
                 あなたは優秀なWebディレクターのアシスタントです。
                 以下の情報を基に、指定された項目について出力してください。
 
-                【現在の確定情報】
-                {st.session_state.confirmed}
-
-                【現在の未定事項】
-                {st.session_state.pending}
-
-                【これまでの全会話ログ】
-                {current_full_log}
+                【現在の確定情報】{st.session_state.confirmed}
+                【現在の未定事項】{st.session_state.pending}
+                【これまでの全会話ログ】{current_full_log}
 
                 【指示：以下の項目について出力してください】
                 {tasks_instruction}
@@ -225,18 +216,16 @@ with right_col:
                 with st.spinner("分析中..."):
                     text, error = generate_with_model(model_high_speed, prompt)
                     if text:
-                        # 結果を履歴に追加（タイムスタンプ付き）
                         timestamp = datetime.datetime.now().strftime("%H:%M")
                         st.session_state.meeting_support_history.insert(0, {
                             "time": timestamp,
                             "content": text,
                             "tasks": tasks_instruction
                         })
-                        st.success("出力完了（下に表示されます）")
+                        st.success("出力完了")
                     elif error:
                         error_container.error(error)
 
-        # 履歴表示エリア
         st.markdown("---")
         st.markdown("#### 📝 出力履歴")
         if not st.session_state.meeting_support_history:
@@ -246,20 +235,40 @@ with right_col:
             with st.expander(f"出力 #{len(st.session_state.meeting_support_history)-i} ({item['time']})", expanded=(i==0)):
                 st.markdown(item['content'])
 
-    # --- Tab 3: 打ち合わせ後まとめ（新設） ---
+    # --- Tab 3: 打ち合わせ後まとめ（機能追加版） ---
     with tab3:
         st.markdown("### 📝 打ち合わせ後まとめ")
         st.caption(f"使用モデル: `{model_high_quality}` (高精度)")
         st.info("全ての会議ログとバイブル情報を統合し、プロジェクトの全体像を再構築します。")
 
+        # 1. 全ログの確認・編集
+        st.markdown("#### 1. 会議ログの確認・修正")
+        edited_transcript = st.text_area(
+            "これまでの全会話ログ（必要に応じて修正してください）",
+            value=st.session_state.full_transcript,
+            height=200,
+            key="edited_transcript_view"
+        )
+        # 修正があれば保存
+        if edited_transcript != st.session_state.full_transcript:
+            st.session_state.full_transcript = edited_transcript
+
+        # 2. ディレクターメモ
+        st.markdown("#### 2. ディレクター所感・メモ")
+        director_memo = st.text_area(
+            "AIに伝えたいニュアンスや補足事項を入力",
+            height=100,
+            placeholder="例：クライアントは予算よりも納期を気にしている様子だった。デザインはA案の方向で進めたい。"
+        )
+
         if st.button("まとめを作成（確定情報の更新案）", key="btn_post_meeting"):
             if not st.session_state.full_transcript:
-                st.warning("会議ログがまだありません。Tab 2でログを入力してください。")
+                st.warning("会議ログがまだありません。")
             else:
                 with st.spinner(f"全体分析中 ({model_high_quality})..."):
                     prompt = f"""
                     あなたは統括ディレクターです。
-                    これまでの全ての会議ログと、現在のプロジェクト情報を統合し、
+                    これまでの全ての会議ログ、ディレクターのメモ、現在のプロジェクト情報を統合し、
                     **「最新の確定情報」と「残課題」**を整理してください。
 
                     【現在の確定情報】
@@ -270,10 +279,14 @@ with right_col:
 
                     【全会議ログ】
                     {st.session_state.full_transcript}
+                    
+                    【ディレクターからの重要メモ・所感】
+                    {director_memo}
 
                     【指示】
-                    1. ログ全体を分析し、確定情報を最新化・詳細化してください。（変更点には★をつける）
-                    2. 解決した未定事項を消し、新たに出た課題をTodoリストに追加してください。
+                    1. ログ全体とディレクターメモを分析し、確定情報を最新化・詳細化してください。（変更点には★をつける）
+                    2. ディレクターのメモにある意図を汲み取り、バイブルに反映させてください。
+                    3. 解決した未定事項を消し、新たに出た課題をTodoリストに追加してください。
                     
                     出力形式: ===CONFIRMED=== (内容) ===PENDING=== (内容)
                     """
@@ -282,7 +295,6 @@ with right_col:
                     if text:
                         if "===PENDING===" in text:
                             parts = text.split("===PENDING===")
-                            # 一時保存用の変数に入れる（確認して反映するため）
                             st.session_state.post_meeting_conf = parts[0].replace("===CONFIRMED===", "").strip()
                             st.session_state.post_meeting_pend = parts[1].strip()
                         else:
@@ -291,8 +303,8 @@ with right_col:
                     elif error:
                         error_container.error(error)
 
-        # 結果表示と反映ボタン（Tab 2から移動してきたロジック）
-        if "post_meeting_conf" in st.session_state:
+        # 結果表示と反映ボタン
+        if st.session_state.post_meeting_conf:
             st.success("✅ **分析完了（更新案）**")
             col_b1, col_b2 = st.columns(2)
             with col_b1:
@@ -307,13 +319,11 @@ with right_col:
                 st.session_state.confirmed = clean_conf
                 st.session_state.pending = st.session_state.post_meeting_pend
                 
-                # バージョンアップ（強制リフレッシュ）
                 st.session_state.confirmed_version += 1
                 st.session_state.pending_version += 1
                 
-                # 一時データをクリア
-                del st.session_state.post_meeting_conf
-                if "post_meeting_pend" in st.session_state: del st.session_state.post_meeting_pend
+                st.session_state.post_meeting_conf = ""
+                st.session_state.post_meeting_pend = ""
                 
                 st.success("反映完了！")
                 time.sleep(0.5)
