@@ -11,9 +11,13 @@ from oauth2client.service_account import ServiceAccountCredentials
 # 1. 設定・準備
 # ==========================================
 st.set_page_config(page_title="AI Director Assistant", layout="wide")
-st.title("🚀 AI Web Direction Assistant (v17.0 Cloud Sync)")
+st.title("🚀 AI Web Direction Assistant (v17.1 Fixed)")
 
 error_container = st.container()
+
+# 【重要修正】変数の初期化（NameError防止）
+model_high_quality = "gemini-2.5-pro"
+model_high_speed = "gemini-2.5-flash"
 
 # デフォルトテンプレート
 DEFAULT_TEMPLATE = """■基本情報
@@ -74,14 +78,15 @@ TikTok：
 # 2. クラウド同期機能（Google Sheets）
 # ==========================================
 def get_gspread_client():
-    # Streamlit Secretsから認証情報を取得
     try:
         scope = ['https://spreadsheets.google.com/feeds', 'https://www.googleapis.com/auth/drive']
-        # secrets.tomlの構造に合わせて読み込み
-        creds_dict = dict(st.secrets["gcp_service_account"])
-        creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
-        client = gspread.authorize(creds)
-        return client
+        if "gcp_service_account" in st.secrets:
+            creds_dict = dict(st.secrets["gcp_service_account"])
+            creds = ServiceAccountCredentials.from_json_keyfile_dict(creds_dict, scope)
+            client = gspread.authorize(creds)
+            return client
+        else:
+            return None
     except Exception as e:
         st.error(f"Google Sheets認証エラー: {e}")
         return None
@@ -91,16 +96,15 @@ def load_from_sheet():
     if not client: return False
     
     try:
-        sheet_name = st.secrets["SPREADSHEET_NAME"]
-        sheet = client.open(sheet_name).sheet1
-        # A1セルからJSONデータを取得
-        json_str = sheet.acell('A1').value
-        if json_str:
-            data = json.loads(json_str)
-            # プロジェクト情報の復元
-            if "projects" in data:
-                st.session_state.data_store = data
-                return True
+        if "SPREADSHEET_NAME" in st.secrets:
+            sheet_name = st.secrets["SPREADSHEET_NAME"]
+            sheet = client.open(sheet_name).sheet1
+            json_str = sheet.acell('A1').value
+            if json_str:
+                data = json.loads(json_str)
+                if "projects" in data:
+                    st.session_state.data_store = data
+                    return True
     except Exception as e:
         st.warning(f"データ読み込み失敗（初回またはエラー）: {e}")
     return False
@@ -110,13 +114,12 @@ def save_to_sheet():
     if not client: return False
     
     try:
-        sheet_name = st.secrets["SPREADSHEET_NAME"]
-        sheet = client.open(sheet_name).sheet1
-        # 現在のデータストアをJSON化
-        json_str = json.dumps(st.session_state.data_store, indent=2, ensure_ascii=False)
-        # A1セルに保存（文字数制限に注意だが、数万文字はいける）
-        sheet.update_acell('A1', json_str)
-        return True
+        if "SPREADSHEET_NAME" in st.secrets:
+            sheet_name = st.secrets["SPREADSHEET_NAME"]
+            sheet = client.open(sheet_name).sheet1
+            json_str = json.dumps(st.session_state.data_store, indent=2, ensure_ascii=False)
+            sheet.update_acell('A1', json_str)
+            return True
     except Exception as e:
         st.error(f"データ保存失敗: {e}")
         return False
@@ -131,10 +134,10 @@ if "GEMINI_API_KEY" in st.secrets:
 else:
     default_api_key = ""
 
-# 初期化時にクラウドからロードを試みる
+# 初期化
 if "data_store" not in st.session_state:
     st.session_state.data_store = {
-        "api_key": default_api_key, # Secretsのキーをデフォルトに
+        "api_key": default_api_key,
         "current_project_id": "Default Project",
         "projects": {
             "Default Project": {
@@ -148,9 +151,7 @@ if "data_store" not in st.session_state:
             }
         }
     }
-    # 初回ロード実行
     if load_from_sheet():
-        # ロード成功したら、APIキーはSecretsのものを優先するか確認（今回はSecrets優先）
         if default_api_key:
             st.session_state.data_store["api_key"] = default_api_key
 
@@ -210,7 +211,6 @@ with st.sidebar:
     st.markdown("---")
 
     st.header("🗂️ プロジェクト")
-    # プロジェクト切替
     project_names = list(st.session_state.data_store["projects"].keys())
     current_index = 0
     if st.session_state.data_store["current_project_id"] in project_names:
@@ -226,29 +226,25 @@ with st.sidebar:
     if st.button("＋ 追加"):
         if create_new_project(new_proj_name):
             st.success(f"作成: {new_proj_name}")
-            # 新規作成時も自動保存推奨
             save_to_sheet()
             time.sleep(0.5)
             st.rerun()
 
     st.markdown("---")
 
-    # APIキー設定（Secretsがある場合は隠してもいいが、確認用に表示）
-    # データストアにあるキーを使用
     api_key = st.session_state.data_store.get("api_key", "")
     if not api_key and default_api_key:
         api_key = default_api_key
     
-    # 表示・編集はしない（Secretsで管理する前提）が、接続用変数に入れる
     if default_api_key:
         st.success("🔑 APIキー: Secretsから読込済")
     else:
         api_key = st.text_input("API Key (未設定)", type="password")
 
-    # モデル設定
+    # モデル設定（変数を上書き）
     with st.expander("モデル設定の詳細"):
-        model_high_quality = st.text_input("高精度 (分析・出力)", value="gemini-2.5-pro")
-        model_high_speed = st.text_input("高速 (会議・チャット)", value="gemini-2.5-flash")
+        model_high_quality = st.text_input("高精度 (分析・出力)", value=model_high_quality)
+        model_high_speed = st.text_input("高速 (会議・チャット)", value=model_high_speed)
     
     if api_key:
         genai.configure(api_key=api_key)
@@ -271,6 +267,18 @@ safety_settings = {
 # ==========================================
 # 5. メインロジック
 # ==========================================
+
+# ここで共通関数を定義（変数が確定した後）
+def generate_with_model(model_name, prompt):
+    if not api_key: return None, "APIキー未設定"
+    try:
+        model = genai.GenerativeModel(model_name)
+        response = model.generate_content(prompt, safety_settings=safety_settings)
+        if not response.parts: return None, "応答が空です"
+        return response.text, None
+    except Exception as e:
+        return None, str(e)
+
 curr_proj = get_current_project()
 
 st.markdown(f"### 📂 Project: {st.session_state.data_store['current_project_id']}")
@@ -347,6 +355,7 @@ with right_col:
                 
                 出力形式: ===SECTION1=== (埋めた後の確定情報全文) ===SECTION2=== (戦略・未定事項)
                 """
+                # ここで model_high_quality を使用（初期化済みなのでエラーにならない）
                 text, error = generate_with_model(model_high_quality, prompt)
                 if text:
                     if "===SECTION2===" in text:
@@ -356,7 +365,7 @@ with right_col:
                     else:
                         curr_proj["confirmed"] = text
                     st.success("反映しました")
-                    save_to_sheet() # 自動保存
+                    save_to_sheet() 
                     time.sleep(0.5)
                     st.rerun()
                 elif error: error_container.error(error)
@@ -408,7 +417,7 @@ with right_col:
                             "tasks": tasks_instruction
                         })
                         st.success("完了")
-                        save_to_sheet() # 自動保存
+                        save_to_sheet()
                     elif error: error_container.error(error)
 
         st.markdown("---")
@@ -465,7 +474,7 @@ with right_col:
                 curr_proj["pending"] = st.session_state.temp_res["pend"]
                 st.session_state.temp_res = {"conf": "", "pend": ""}
                 st.success("反映完了")
-                save_to_sheet() # 自動保存
+                save_to_sheet()
                 time.sleep(0.5)
                 st.rerun()
 
@@ -515,4 +524,4 @@ with right_col:
             if text:
                 curr_proj["chat_history"].append({"role": "assistant", "text": text})
                 curr_proj["chat_context"].append(f"AI: {text}")
-                save_to_sheet() # チャットも一応保存
+                save_to_sheet()
