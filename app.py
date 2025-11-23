@@ -8,7 +8,7 @@ import datetime
 # 1. 設定・準備
 # ==========================================
 st.set_page_config(page_title="AI Director Assistant", layout="wide")
-st.title("🚀 AI Web Direction Assistant (v14.0 Template)")
+st.title("🚀 AI Web Direction Assistant (v15.0 Memo)")
 
 # エラー表示エリア
 error_container = st.container()
@@ -54,7 +54,7 @@ safety_settings = {
 # 2. 状態管理
 # ==========================================
 
-# ユーザー定義のテンプレート（ここをAIに埋めさせる）
+# ユーザー定義のテンプレート
 BIBLE_TEMPLATE = """■基本情報
 クライアント名：
 新規・リニューアル：
@@ -111,7 +111,6 @@ TikTok：
 
 if "confirmed" not in st.session_state:
     st.session_state.confirmed = BIBLE_TEMPLATE
-
 if "confirmed_version" not in st.session_state: st.session_state.confirmed_version = 0
 
 if "pending" not in st.session_state:
@@ -119,6 +118,11 @@ if "pending" not in st.session_state:
 - 
 """
 if "pending_version" not in st.session_state: st.session_state.pending_version = 0
+
+# 新追加：ディレクター自由メモ
+if "director_memo" not in st.session_state:
+    st.session_state.director_memo = ""
+if "memo_version" not in st.session_state: st.session_state.memo_version = 0
 
 if "full_transcript" not in st.session_state:
     st.session_state.full_transcript = "" 
@@ -158,10 +162,10 @@ with left_col:
     tab_conf_view, tab_conf_edit = st.tabs(["👀 プレビュー", "✏️ 編集"])
     with tab_conf_edit:
         conf_key = f"confirmed_{st.session_state.confirmed_version}"
-        new_confirmed = st.text_area("確定情報", value=st.session_state.confirmed, height=600, key=conf_key, label_visibility="collapsed")
+        new_confirmed = st.text_area("確定情報", value=st.session_state.confirmed, height=500, key=conf_key, label_visibility="collapsed")
         st.session_state.confirmed = new_confirmed
     with tab_conf_view:
-        st.text(st.session_state.confirmed) # テンプレート崩れを防ぐためmarkdownではなくtextで表示
+        st.text(st.session_state.confirmed)
 
     st.markdown("---")
 
@@ -173,6 +177,19 @@ with left_col:
         st.session_state.pending = new_pending
     with tab_pend_view:
         st.markdown(st.session_state.pending)
+
+    st.markdown("---")
+
+    # 新追加：ディレクター自由メモ欄
+    st.caption("▼ ディレクター自由メモ (Private Memo)")
+    st.markdown("<span style='font-size:0.8em; color:gray'>※ここはAIに共有されますが、AIによって自動更新されることはありません。</span>", unsafe_allow_html=True)
+    tab_memo_view, tab_memo_edit = st.tabs(["👀 プレビュー", "✏️ 編集"])
+    with tab_memo_edit:
+        memo_key = f"memo_{st.session_state.memo_version}"
+        new_memo = st.text_area("自由メモ", value=st.session_state.director_memo, height=150, key=memo_key, label_visibility="collapsed")
+        st.session_state.director_memo = new_memo
+    with tab_memo_view:
+        st.markdown(st.session_state.director_memo)
 
 # --- 右カラム（AIツール） ---
 with right_col:
@@ -194,13 +211,16 @@ with right_col:
             with st.spinner(f"分析中 ({model_high_quality})..."):
                 prompt = f"""
                 あなたはWebディレクターです。
-                以下の「入力メモ」から情報を抽出し、
+                以下の「入力メモ」と「ディレクターの自由メモ」から情報を抽出し、
                 現在の「確定情報テンプレート」の該当する空欄を埋めてください。
                 
                 【現在の確定情報テンプレート】
                 {st.session_state.confirmed}
                 
-                【入力メモ】
+                【ディレクターの自由メモ】（※参考情報）
+                {st.session_state.director_memo}
+                
+                【入力メモ】（※今回の分析対象）
                 {tool_a_input}
                 
                 【ルール】
@@ -263,6 +283,9 @@ with right_col:
 
                 【現在の未定事項】
                 {st.session_state.pending}
+                
+                【ディレクターの自由メモ】（※考慮すべき補足情報）
+                {st.session_state.director_memo}
 
                 【これまでの全会話ログ】
                 {current_full_log}
@@ -311,11 +334,12 @@ with right_col:
         if edited_transcript != st.session_state.full_transcript:
             st.session_state.full_transcript = edited_transcript
 
-        st.markdown("#### 2. ディレクター所感・メモ")
-        director_memo = st.text_area(
-            "AIへの指示・補足",
-            height=100,
-            placeholder="例：デザインの方向性は「シンプル」で確定。納期は相談ベースで。"
+        # ディレクター所感メモは左側の自由メモ欄に統合されたので、ここは補足的な一時指示入力とする
+        st.markdown("#### 2. 今回のまとめ処理への追加指示")
+        director_instruction = st.text_area(
+            "AIへの具体的な指示（オプション）",
+            height=80,
+            placeholder="例：デザインの方向性はA案で確定としてまとめてください。"
         )
 
         if st.button("まとめを作成（テンプレート更新案）", key="btn_post_meeting"):
@@ -332,12 +356,15 @@ with right_col:
 
                     【現在の未定事項】
                     {st.session_state.pending}
+                    
+                    【ディレクターの自由メモ】（※最優先で考慮すべき事項）
+                    {st.session_state.director_memo}
 
                     【全会議ログ】
                     {st.session_state.full_transcript}
                     
-                    【ディレクターメモ】
-                    {director_memo}
+                    【追加の指示】
+                    {director_instruction}
 
                     【指示】
                     1. ログとメモを分析し、**テンプレートの空欄を可能な限り埋めてください**。
@@ -387,7 +414,15 @@ with right_col:
     with tab4:
         if st.button("指示書を出力", type="primary", key="btn_c"):
              with st.spinner(f"作成中 ({model_high_quality})..."):
-                prompt = f"以下の確定情報から、デザイナーへ渡す制作指示書を作成してください。\n{st.session_state.confirmed}"
+                prompt = f"""
+                以下の確定情報から、デザイナーへ渡す制作指示書を作成してください。
+                
+                【確定情報】
+                {st.session_state.confirmed}
+                
+                【ディレクターの自由メモ】（※補足情報として参照）
+                {st.session_state.director_memo}
+                """
                 text, error = generate_with_model(model_high_quality, prompt)
                 if text: st.markdown(text)
                 elif error: error_container.error(error)
@@ -407,7 +442,13 @@ with right_col:
             
             st.session_state.chat_context.append(f"User: {user_input}")
             history = "\n".join(st.session_state.chat_context[-5:])
-            prompt = f"【状況】{st.session_state.confirmed}\n【履歴】{history}\nUser: {user_input}"
+            prompt = f"""
+            【状況】{st.session_state.confirmed}
+            【未定】{st.session_state.pending}
+            【メモ】{st.session_state.director_memo}
+            【履歴】{history}
+            User: {user_input}
+            """
             
             with chat_container:
                 with st.chat_message("assistant"):
