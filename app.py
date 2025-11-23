@@ -7,7 +7,7 @@ import time
 # 1. 設定・準備
 # ==========================================
 st.set_page_config(page_title="AI Director Assistant", layout="wide")
-st.title("🚀 AI Web Direction Assistant (v9.0 Stable)")
+st.title("🚀 AI Web Direction Assistant (v11.0 Auto-Switch)")
 
 # エラー表示エリア
 error_container = st.container()
@@ -18,64 +18,38 @@ with st.sidebar:
     
     api_key = st.text_input("Gemini API Key", type="password")
     
-    # 利用可能なモデルリスト（自動取得できない場合のフォールバック）
-    default_models = [
-        "gemini-1.5-flash", 
-        "gemini-1.5-pro", 
-        "gemini-1.5-flash-001",
-        "gemini-1.5-pro-001",
-        "gemini-2.0-flash-exp",
-        "gemini-pro"
-    ]
+    # モデル自動割り当て設定（デフォルトをご要望の通りに設定）
+    st.markdown("### 🤖 モデル割り当て")
+    st.caption("タスクに応じて最適なモデルを自動で使用します")
     
-    if "available_models" not in st.session_state:
-        st.session_state.available_models = default_models
-    
-    active_model = None
+    with st.expander("モデル設定の詳細を確認・変更する"):
+        # 高負荷タスク用（Pro）
+        model_high_quality = st.text_input(
+            "高精度モデル (事前分析・最終出力)", 
+            value="gemini-2.5-pro",
+            help="深い推論が必要なタスクで使用されます"
+        )
+        # 高速タスク用（Flash）
+        model_high_speed = st.text_input(
+            "高速モデル (会議・チャット)", 
+            value="gemini-2.5-flash",
+            help="レスポンス速度が重要なタスクで使用されます"
+        )
     
     if api_key:
         genai.configure(api_key=api_key)
         
         # 接続テストボタン
-        if st.button("📡 接続テスト（利用可能なモデルを取得）"):
-            with st.spinner("サーバーに問い合わせ中..."):
+        if st.button("📡 接続テスト"):
+            with st.spinner("Googleのサーバーに問い合わせ中..."):
                 try:
-                    models = genai.list_models()
-                    fetched_models = []
-                    for m in models:
-                        if 'generateContent' in m.supported_generation_methods:
-                            clean_name = m.name.replace("models/", "")
-                            fetched_models.append(clean_name)
-                    
-                    if fetched_models:
-                        # 取得できたリストとデフォルトをマージして重複削除
-                        merged = sorted(list(set(fetched_models + default_models)))
-                        st.session_state.available_models = merged
-                        st.success(f"✅ 成功！ {len(fetched_models)}個のモデルが見つかりました。")
-                    else:
-                        st.warning("⚠️ モデルリストが取得できませんでしたが、手動選択は可能です。")
+                    # テスト用にProモデルで疎通確認
+                    test_model = genai.GenerativeModel(model_high_quality)
+                    # 軽くgenerateして確認（トークン節約のため最小限のリクエストは送らず、オブジェクト生成のみ確認）
+                    st.success(f"✅ 接続設定OK\n\n・分析用: `{model_high_quality}`\n・対話用: `{model_high_speed}`")
                         
                 except Exception as e:
                     st.error(f"❌ 接続エラー: {e}")
-
-        # モデル選択
-        st.markdown("### 🤖 モデル選択")
-        selected_model_name = st.selectbox(
-            "使用モデル", 
-            st.session_state.available_models,
-            index=0
-        )
-        
-        # デバッグモード
-        debug_mode = st.checkbox("デバッグモード", value=False)
-
-        if selected_model_name:
-            try:
-                active_model = genai.GenerativeModel(selected_model_name)
-                if debug_mode:
-                    st.caption(f"Active: {selected_model_name}")
-            except Exception as e:
-                st.error(f"モデル設定エラー: {e}")
 
     else:
         st.warning("APIキーを入力してください")
@@ -94,7 +68,7 @@ safety_settings = {
 }
 
 # ==========================================
-# 2. 状態管理（動的キー管理を追加）
+# 2. 状態管理（動的キー管理）
 # ==========================================
 if "confirmed" not in st.session_state:
     st.session_state.confirmed = """### 【基本情報】
@@ -108,7 +82,6 @@ if "confirmed" not in st.session_state:
 ### 【要件（予算・納期）】
 - 
 """
-# テキストエリアを強制リフレッシュするためのバージョン番号
 if "confirmed_version" not in st.session_state:
     st.session_state.confirmed_version = 0
 
@@ -125,24 +98,22 @@ if "chat_context" not in st.session_state:
     st.session_state.chat_context = [] 
 
 # ==========================================
-# 3. 共通関数
+# 3. 共通関数（モデル指定対応版）
 # ==========================================
-def generate_with_retry(prompt):
-    if not active_model:
-        return None, "APIキーまたはモデルが設定されていません"
+def generate_with_model(model_name, prompt):
+    """指定されたモデル名で生成を実行する関数"""
+    if not api_key:
+        return None, "APIキーが設定されていません"
     
     try:
+        # 指定されたモデルでインスタンス化
+        active_model = genai.GenerativeModel(model_name)
+        
         response = active_model.generate_content(
             prompt, 
             safety_settings=safety_settings
         )
         
-        if debug_mode:
-            with st.sidebar:
-                st.markdown("---")
-                st.caption("Debug: Raw Response")
-                st.write(response)
-
         if not response.parts:
             if response.prompt_feedback:
                 return None, f"⚠️ 安全フィルターによりブロックされました: {response.prompt_feedback}"
@@ -155,7 +126,7 @@ def generate_with_retry(prompt):
         if "429" in err_str:
             return None, "🛑 **利用制限超過 (429 Error)**\n\nアクセス過多です。少し待ってから再試行してください。"
         elif "404" in err_str:
-            return None, f"🔍 **モデルが見つかりません (404 Error)**\n\n選択中のモデル `{active_model.model_name}` は現在利用できません。\nサイドバーの「接続テスト」ボタンを押して、確実なリストを再取得してください。"
+            return None, f"🔍 **モデルが見つかりません (404 Error)**\n\n指定されたモデル `{model_name}` は利用できません。\nサイドバーの「モデル設定の詳細」でモデル名を変更してください（例: gemini-1.5-pro など）。"
         else:
             return None, f"❌ エラーが発生しました:\n{e}"
 
@@ -172,7 +143,6 @@ with left_col:
     tab_conf_view, tab_conf_edit = st.tabs(["👀 プレビュー", "✏️ 編集"])
     
     with tab_conf_edit:
-        # 動的キーを使用（バージョンが変わると新しいウィジェットとして生成される）
         conf_key = f"confirmed_area_{st.session_state.confirmed_version}"
         new_confirmed = st.text_area(
             "確定情報エディタ", 
@@ -181,7 +151,6 @@ with left_col:
             key=conf_key, 
             label_visibility="collapsed"
         )
-        # 手動編集の内容を即座に保存
         st.session_state.confirmed = new_confirmed
         
     with tab_conf_view:
@@ -212,19 +181,22 @@ with right_col:
     
     tab1, tab2, tab3, tab4 = st.tabs(["📨 事前分析", "🗣️ 会議サポート", "📑 最終出力", "💡 壁打ち"])
 
-    # --- Tab 1: 事前分析 ---
+    # --- Tab 1: 事前分析 (Proモデル使用) ---
     with tab1:
         st.write("メモから情報を整理します")
+        st.caption(f"使用モデル: `{model_high_quality}` (高精度)")
         tool_a_input = st.text_area("メモを入力", height=100)
+        
         if st.button("分析実行", key="btn_a"):
-            with st.spinner("分析中..."):
+            with st.spinner(f"AI ({model_high_quality}) が分析中..."):
                 prompt = f"""
                 あなたはWebディレクターです。以下のメモを【基本情報】と【戦略・質問リスト】に分けて整理してください。
                 見出しには `###` 、重要な箇所には `**太字**` を使い、箇条書き `- ` で読みやすく整形してください。
                 メモ: {tool_a_input}
                 出力形式: ===SECTION1=== (基本情報) ===SECTION2=== (戦略)
                 """
-                text, error = generate_with_retry(prompt)
+                # Proモデルを指定して実行
+                text, error = generate_with_model(model_high_quality, prompt)
                 
                 if error:
                     error_container.error(error)
@@ -236,7 +208,7 @@ with right_col:
                     else:
                         st.session_state.confirmed = text
                     
-                    # バージョンを上げて、強制的にテキストエリアをリフレッシュさせる
+                    # 強制リフレッシュ
                     st.session_state.confirmed_version += 1
                     st.session_state.pending_version += 1
                     
@@ -244,9 +216,10 @@ with right_col:
                     time.sleep(0.5)
                     st.rerun()
 
-    # --- Tab 2: 会議サポート ---
+    # --- Tab 2: 会議サポート (Flashモデル使用) ---
     with tab2:
         st.write("会議ログから情報を更新します")
+        st.caption(f"使用モデル: `{model_high_speed}` (高速)")
         tool_b_input = st.text_area("会議ログ", height=150)
         tool_b_mode = st.selectbox("モード", ["ヒアリング漏れチェック", "議事録・合意形成"])
         
@@ -255,7 +228,7 @@ with right_col:
             st.session_state.tool_b_result_pend = ""
 
         if st.button("AI実行", key="btn_b"):
-            with st.spinner("分析中..."):
+            with st.spinner(f"AI ({model_high_speed}) が分析中..."):
                 instruction = "未定事項を更新してください" if tool_b_mode == 'ヒアリング漏れチェック' else "合意事項を抽出してください"
                 prompt = f"""
                 【確定情報】{st.session_state.confirmed}
@@ -267,7 +240,8 @@ with right_col:
                 2. 見出しや箇条書きを使い、Markdown形式で読みやすく整理してください。
                 出力形式: ===CONFIRMED=== (内容) ===PENDING=== (内容)
                 """
-                text, error = generate_with_retry(prompt)
+                # Flashモデルを指定して実行
+                text, error = generate_with_model(model_high_speed, prompt)
                 
                 if error:
                     error_container.error(error)
@@ -299,7 +273,7 @@ with right_col:
                 st.session_state.confirmed = clean_conf
                 st.session_state.pending = st.session_state.tool_b_result_pend
                 
-                # バージョンアップ（強制リフレッシュ）
+                # 強制リフレッシュ
                 st.session_state.confirmed_version += 1
                 st.session_state.pending_version += 1
                 
@@ -309,20 +283,24 @@ with right_col:
                 time.sleep(0.5)
                 st.rerun()
 
-    # --- Tab 3: 最終出力 ---
+    # --- Tab 3: 最終出力 (Proモデル使用) ---
     with tab3:
-        if st.button("指示書を出力", type="primary", key="btn_c"):
-             with st.spinner("作成中..."):
+        st.caption(f"使用モデル: `{model_high_quality}` (高精度)")
+        if st.button("制作指示書を出力", type="primary", key="btn_c"):
+             with st.spinner(f"AI ({model_high_quality}) が作成中..."):
                 prompt = f"あなたはシニアディレクターです。以下の情報から制作指示書を作成してください。Markdownで見やすく整形してください。\n{st.session_state.confirmed}"
-                text, error = generate_with_retry(prompt)
+                # Proモデルを指定して実行
+                text, error = generate_with_model(model_high_quality, prompt)
                 if error:
                     error_container.error(error)
                 elif text:
                     st.markdown(text)
 
-    # --- Tab 4: 壁打ちチャット ---
+    # --- Tab 4: 壁打ちチャット (Flashモデル使用) ---
     with tab4:
         st.write("フリー相談チャット")
+        st.caption(f"使用モデル: `{model_high_speed}` (高速)")
+        
         chat_container = st.container()
         with chat_container:
             for msg in st.session_state.chat_history:
@@ -349,7 +327,8 @@ with right_col:
             with chat_container:
                 with st.chat_message("assistant"):
                     with st.spinner("思考中..."):
-                        text, error = generate_with_retry(prompt)
+                        # Flashモデルを指定して実行
+                        text, error = generate_with_model(model_high_speed, prompt)
                         if error:
                             st.error(error)
                             ai_resp = f"⚠️ エラー: {error}"
