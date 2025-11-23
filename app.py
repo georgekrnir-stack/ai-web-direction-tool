@@ -8,7 +8,7 @@ import datetime
 # 1. 設定・準備
 # ==========================================
 st.set_page_config(page_title="AI Director Assistant", layout="wide")
-st.title("🚀 AI Web Direction Assistant (v13.1 Summary Enhanced)")
+st.title("🚀 AI Web Direction Assistant (v14.0 Template)")
 
 # エラー表示エリア
 error_container = st.container()
@@ -53,18 +53,65 @@ safety_settings = {
 # ==========================================
 # 2. 状態管理
 # ==========================================
+
+# ユーザー定義のテンプレート（ここをAIに埋めさせる）
+BIBLE_TEMPLATE = """■基本情報
+クライアント名：
+新規・リニューアル：
+既存サイトURL（リニューアル時）：
+サイトドメイン（新規・移管）：
+サイトタイトル（SEO用）：
+サイトディスクリプション（SEO用）：
+業種：
+業務内容の簡単な説明：
+メールの転送先：
+
+■デザインの方向性
+ロゴの有無：
+メインフォント：
+キーカラー：
+サブカラー（あれば）：
+デザインイメージ：
+デザインキーワード：
+参考サイト（どこが気に入っているかがあればそれも）：
+
+■サイト制作の目的・解決したい課題
+例：名刺がわり、集客・認知、営業後のフォローなど
+
+■SNS（ない場合・掲載不要の場合は空欄）
+Instagram：
+X：
+Facebook：
+TikTok：
+
+■ロゴ制作（制作する場合のみ）
+フォント：
+参考ロゴ：
+デザインイメージ・キーワード：
+
+■納期など
+納期など（特に指定がなければ通常納期１ヶ月程度）
+
+■サイトの戦略（顧客と合意したもの）
+
+■写真素材などの有無
+プロ撮影素材あり・クライアント撮影素材あり・有料素材購入・フリー素材で作成
+
+■サイトマップ（全○ページ）
+例：
+トップ
+お知らせ
+会社概要
+よくある質問
+お問い合わせ
+
+■各ページ雛形
+・セクションタイトル（見出し）
+本文本文本文本文本文本文本文本文"""
+
 if "confirmed" not in st.session_state:
-    st.session_state.confirmed = """### 【基本情報】
-- **クライアント名**: 
-- **業種**: 
-- **ターゲット**: 
+    st.session_state.confirmed = BIBLE_TEMPLATE
 
-### 【決定した方針】
-- 
-
-### 【要件（予算・納期）】
-- 
-"""
 if "confirmed_version" not in st.session_state: st.session_state.confirmed_version = 0
 
 if "pending" not in st.session_state:
@@ -76,11 +123,9 @@ if "pending_version" not in st.session_state: st.session_state.pending_version =
 if "full_transcript" not in st.session_state:
     st.session_state.full_transcript = "" 
 
-# 会議サポートの出力履歴用
 if "meeting_support_history" not in st.session_state:
     st.session_state.meeting_support_history = []
 
-# 打ち合わせ後まとめの出力一時保存
 if "post_meeting_conf" not in st.session_state: st.session_state.post_meeting_conf = ""
 if "post_meeting_pend" not in st.session_state: st.session_state.post_meeting_pend = ""
 
@@ -113,10 +158,10 @@ with left_col:
     tab_conf_view, tab_conf_edit = st.tabs(["👀 プレビュー", "✏️ 編集"])
     with tab_conf_edit:
         conf_key = f"confirmed_{st.session_state.confirmed_version}"
-        new_confirmed = st.text_area("確定情報", value=st.session_state.confirmed, height=300, key=conf_key, label_visibility="collapsed")
+        new_confirmed = st.text_area("確定情報", value=st.session_state.confirmed, height=600, key=conf_key, label_visibility="collapsed")
         st.session_state.confirmed = new_confirmed
     with tab_conf_view:
-        st.markdown(st.session_state.confirmed)
+        st.text(st.session_state.confirmed) # テンプレート崩れを防ぐためmarkdownではなくtextで表示
 
     st.markdown("---")
 
@@ -143,15 +188,27 @@ with right_col:
 
     # --- Tab 1: 事前分析 ---
     with tab1:
-        st.write("メモから情報を整理します")
+        st.write("メモから情報を整理し、テンプレートを埋めます")
         tool_a_input = st.text_area("メモを入力", height=100)
         if st.button("分析実行", key="btn_a"):
             with st.spinner(f"分析中 ({model_high_quality})..."):
                 prompt = f"""
-                あなたはWebディレクターです。以下のメモを【基本情報】と【戦略・質問リスト】に分けて整理してください。
-                Markdown形式で見やすく整形してください。
-                メモ: {tool_a_input}
-                出力形式: ===SECTION1=== (基本情報) ===SECTION2=== (戦略)
+                あなたはWebディレクターです。
+                以下の「入力メモ」から情報を抽出し、
+                現在の「確定情報テンプレート」の該当する空欄を埋めてください。
+                
+                【現在の確定情報テンプレート】
+                {st.session_state.confirmed}
+                
+                【入力メモ】
+                {tool_a_input}
+                
+                【ルール】
+                1. テンプレートの項目名は変更せず、中身だけを埋めてください。
+                2. メモに情報がない項目は、元のまま（空欄）にしておいてください。
+                3. 「戦略・質問リスト」などの未定事項は、別途抽出してください。
+                
+                出力形式: ===SECTION1=== (埋めた後の確定情報全文) ===SECTION2=== (戦略・未定事項)
                 """
                 text, error = generate_with_model(model_high_quality, prompt)
                 if text:
@@ -173,7 +230,6 @@ with right_col:
         st.markdown("### 🗣️ 会議サポート")
         st.caption(f"使用モデル: `{model_high_speed}` (高速)")
         
-        # ログ入力（追記型）
         new_log_input = st.text_area("今回の会話ログ（追記されます）", height=100, placeholder="ここに録音テキストを貼り付け...", key="meeting_log_input")
         
         st.markdown("**実行したいタスクを選択（複数可）:**")
@@ -196,21 +252,25 @@ with right_col:
                 tasks_instruction = ""
                 if check_summary: tasks_instruction += "- 今回の打ち合わせ内容の要約\n"
                 if check_issues: tasks_instruction += "- 現状の発言における矛盾点や懸念される問題点\n"
-                if check_leak: tasks_instruction += "- プロジェクト進行に必要な情報のヒアリング漏れ\n"
+                if check_leak: tasks_instruction += "- プロジェクト進行に必要な情報のヒアリング漏れ（テンプレートの空欄項目を中心に）\n"
                 if check_proposal: tasks_instruction += "- これまでの文脈を踏まえた、具体的な提案（構成やデザインの方向性など）\n"
 
                 prompt = f"""
                 あなたは優秀なWebディレクターのアシスタントです。
-                以下の情報を基に、指定された項目について出力してください。
+                
+                【現在の確定情報（テンプレート）】
+                {st.session_state.confirmed}
 
-                【現在の確定情報】{st.session_state.confirmed}
-                【現在の未定事項】{st.session_state.pending}
-                【これまでの全会話ログ】{current_full_log}
+                【現在の未定事項】
+                {st.session_state.pending}
+
+                【これまでの全会話ログ】
+                {current_full_log}
 
                 【指示：以下の項目について出力してください】
                 {tasks_instruction}
 
-                ※出力はMarkdown形式で見やすく、項目ごとに見出しを付けて整理してください。
+                ※出力はMarkdown形式で見やすく整理してください。テンプレートの更新は行いません。
                 """
 
                 with st.spinner("分析中..."):
@@ -235,43 +295,39 @@ with right_col:
             with st.expander(f"出力 #{len(st.session_state.meeting_support_history)-i} ({item['time']})", expanded=(i==0)):
                 st.markdown(item['content'])
 
-    # --- Tab 3: 打ち合わせ後まとめ（機能追加版） ---
+    # --- Tab 3: 打ち合わせ後まとめ ---
     with tab3:
         st.markdown("### 📝 打ち合わせ後まとめ")
         st.caption(f"使用モデル: `{model_high_quality}` (高精度)")
-        st.info("全ての会議ログとバイブル情報を統合し、プロジェクトの全体像を再構築します。")
+        st.info("ログを分析し、テンプレートを埋めていきます。")
 
-        # 1. 全ログの確認・編集
         st.markdown("#### 1. 会議ログの確認・修正")
         edited_transcript = st.text_area(
-            "これまでの全会話ログ（必要に応じて修正してください）",
+            "全会話ログ",
             value=st.session_state.full_transcript,
             height=200,
             key="edited_transcript_view"
         )
-        # 修正があれば保存
         if edited_transcript != st.session_state.full_transcript:
             st.session_state.full_transcript = edited_transcript
 
-        # 2. ディレクターメモ
         st.markdown("#### 2. ディレクター所感・メモ")
         director_memo = st.text_area(
-            "AIに伝えたいニュアンスや補足事項を入力",
+            "AIへの指示・補足",
             height=100,
-            placeholder="例：クライアントは予算よりも納期を気にしている様子だった。デザインはA案の方向で進めたい。"
+            placeholder="例：デザインの方向性は「シンプル」で確定。納期は相談ベースで。"
         )
 
-        if st.button("まとめを作成（確定情報の更新案）", key="btn_post_meeting"):
+        if st.button("まとめを作成（テンプレート更新案）", key="btn_post_meeting"):
             if not st.session_state.full_transcript:
                 st.warning("会議ログがまだありません。")
             else:
                 with st.spinner(f"全体分析中 ({model_high_quality})..."):
                     prompt = f"""
                     あなたは統括ディレクターです。
-                    これまでの全ての会議ログ、ディレクターのメモ、現在のプロジェクト情報を統合し、
-                    **「最新の確定情報」と「残課題」**を整理してください。
+                    これまでのログとメモを基に、プロジェクト定義書（テンプレート）を完成させてください。
 
-                    【現在の確定情報】
+                    【現在の確定情報（テンプレート）】
                     {st.session_state.confirmed}
 
                     【現在の未定事項】
@@ -280,15 +336,15 @@ with right_col:
                     【全会議ログ】
                     {st.session_state.full_transcript}
                     
-                    【ディレクターからの重要メモ・所感】
+                    【ディレクターメモ】
                     {director_memo}
 
                     【指示】
-                    1. ログ全体とディレクターメモを分析し、確定情報を最新化・詳細化してください。（変更点には★をつける）
-                    2. ディレクターのメモにある意図を汲み取り、バイブルに反映させてください。
-                    3. 解決した未定事項を消し、新たに出た課題をTodoリストに追加してください。
+                    1. ログとメモを分析し、**テンプレートの空欄を可能な限り埋めてください**。
+                    2. 既に書かれている内容も、ログに基づいてより詳細に更新してください。
+                    3. まだ決まっていない項目は、テンプレート内は空欄または「未定」とし、Todoリストに追加してください。
                     
-                    出力形式: ===CONFIRMED=== (内容) ===PENDING=== (内容)
+                    出力形式: ===CONFIRMED=== (テンプレートの更新版全文) ===PENDING=== (Todoリスト)
                     """
                     
                     text, error = generate_with_model(model_high_quality, prompt)
@@ -303,20 +359,18 @@ with right_col:
                     elif error:
                         error_container.error(error)
 
-        # 結果表示と反映ボタン
         if st.session_state.post_meeting_conf:
             st.success("✅ **分析完了（更新案）**")
             col_b1, col_b2 = st.columns(2)
             with col_b1:
                 st.caption("確定情報の更新案")
-                st.text_area("", value=st.session_state.post_meeting_conf, height=300, disabled=True)
+                st.text_area("", value=st.session_state.post_meeting_conf, height=400, disabled=True)
             with col_b2:
                 st.caption("Todoの更新案")
                 st.text_area("", value=st.session_state.post_meeting_pend, height=300, disabled=True)
             
             if st.button("↑ バイブルに反映する", type="primary", key="reflect_post_meeting"):
-                clean_conf = st.session_state.post_meeting_conf.replace("★", "").replace("**★", "**")
-                st.session_state.confirmed = clean_conf
+                st.session_state.confirmed = st.session_state.post_meeting_conf
                 st.session_state.pending = st.session_state.post_meeting_pend
                 
                 st.session_state.confirmed_version += 1
@@ -333,7 +387,7 @@ with right_col:
     with tab4:
         if st.button("指示書を出力", type="primary", key="btn_c"):
              with st.spinner(f"作成中 ({model_high_quality})..."):
-                prompt = f"以下の確定情報から制作指示書を作成してください。\n{st.session_state.confirmed}"
+                prompt = f"以下の確定情報から、デザイナーへ渡す制作指示書を作成してください。\n{st.session_state.confirmed}"
                 text, error = generate_with_model(model_high_quality, prompt)
                 if text: st.markdown(text)
                 elif error: error_container.error(error)
