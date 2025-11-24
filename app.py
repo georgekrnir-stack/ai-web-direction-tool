@@ -11,7 +11,7 @@ from oauth2client.service_account import ServiceAccountCredentials
 # 1. 設定・準備
 # ==========================================
 st.set_page_config(page_title="AI Director Assistant", layout="wide")
-st.title("🚀 AI Web Direction Assistant (v19.0 Auto-Save)")
+st.title("🚀 AI Web Direction Assistant (v20.0 PlainText)")
 
 error_container = st.container()
 
@@ -142,7 +142,7 @@ if "data_store" not in st.session_state:
         "projects": {
             "Default Project": {
                 "confirmed": DEFAULT_TEMPLATE,
-                "pending": "### 【次回確認事項】\n- ",
+                "pending": "【次回確認事項】\n- ",
                 "director_memo": "",
                 "full_transcript": "",
                 "meeting_history": [],
@@ -161,7 +161,7 @@ def get_current_project():
     if pid not in st.session_state.data_store["projects"]:
         st.session_state.data_store["projects"][pid] = {
             "confirmed": DEFAULT_TEMPLATE,
-            "pending": "### 【次回確認事項】\n- ",
+            "pending": "【次回確認事項】\n- ",
             "director_memo": "",
             "full_transcript": "",
             "meeting_history": [],
@@ -174,7 +174,7 @@ def create_new_project(name):
     if name and name not in st.session_state.data_store["projects"]:
         st.session_state.data_store["projects"][name] = {
             "confirmed": DEFAULT_TEMPLATE,
-            "pending": "### 【次回確認事項】\n- ",
+            "pending": "【次回確認事項】\n- ",
             "director_memo": "",
             "full_transcript": "",
             "meeting_history": [],
@@ -185,7 +185,7 @@ def create_new_project(name):
         return True
     return False
 
-# UIリフレッシュ用のバージョン管理変数（なければ初期化）
+# UIリフレッシュ用のバージョン管理変数
 if "ui_version" not in st.session_state:
     st.session_state.ui_version = 0
 
@@ -212,7 +212,7 @@ with st.sidebar:
                 if save_to_sheet():
                     st.success("完了")
 
-    st.caption("※ 変更時に自動保存されます")
+    st.caption("※ Googleスプレッドシートに自動保存されます")
     st.markdown("---")
 
     st.header("🗂️ プロジェクト")
@@ -290,13 +290,9 @@ curr_proj = get_current_project()
 def on_text_change(key, field):
     """テキストエリアの変更時に呼び出され、即座に保存する"""
     new_value = st.session_state[key]
-    # 現在のプロジェクトの該当フィールドを更新
     curr_proj_id = st.session_state.data_store["current_project_id"]
     st.session_state.data_store["projects"][curr_proj_id][field] = new_value
-    
-    # クラウドに保存
     save_to_sheet()
-    # トースト通知（右下に小さく出る）
     st.toast(f"💾 {field} を保存しました")
 
 st.markdown(f"### 📂 Project: {st.session_state.data_store['current_project_id']}")
@@ -312,8 +308,6 @@ with left_col:
 
     st.caption("▼ 確定情報")
     conf_key = f"conf_{ver_suffix}"
-    
-    # 手動編集時の自動保存を追加
     st.text_area(
         "確定情報", 
         value=curr_proj["confirmed"], 
@@ -356,12 +350,13 @@ with left_col:
 with right_col:
     st.subheader("🛠️ AIツール")
     
+    # タブ名を変更
     tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "📨 事前分析", 
         "🗣️ 会議サポート", 
         "📝 打ち合わせ後まとめ", 
         "📑 最終出力", 
-        "💡 壁打ち"
+        "💡 フリーAI相談"
     ])
 
     # --- Tab 1: 事前分析 ---
@@ -374,6 +369,7 @@ with right_col:
 
         if st.button("分析実行（案を作成）", key="btn_a"):
             with st.spinner(f"分析中 ({model_high_quality})..."):
+                # プロンプト修正: マークダウン禁止
                 prompt = f"""
                 あなたはWebディレクターです。
                 以下の「入力メモ」と「ディレクターの自由メモ」から情報を抽出し、
@@ -392,6 +388,7 @@ with right_col:
                 1. テンプレートの項目名は変更せず、中身だけを埋めてください。
                 2. メモに情報がない項目は、元のまま（空欄）にしておいてください。
                 3. 未定事項は別途抽出してください。
+                4. **マークダウン記法（**太字**や###見出し等）は使用せず、プレーンテキストで出力してください。**
                 
                 出力形式: ===SECTION1=== (埋めた後の確定情報全文) ===SECTION2=== (戦略・未定事項)
                 """
@@ -407,6 +404,7 @@ with right_col:
                 elif error:
                     error_container.error(error)
 
+        # 結果表示と反映ボタン
         if st.session_state.pre_analysis_res["conf"]:
             st.success("✅ **分析完了（更新案）**")
             col_b1, col_b2 = st.columns(2)
@@ -457,6 +455,7 @@ with right_col:
                 if check_leak: tasks_instruction += "- 情報のヒアリング漏れ（テンプレート空欄中心）\n"
                 if check_proposal: tasks_instruction += "- 文脈を踏まえた具体的な提案\n"
 
+                # プロンプト修正: マークダウン禁止＆簡潔化指示
                 prompt = f"""
                 あなたは優秀なWebディレクターのアシスタントです。
                 【確定情報】{curr_proj["confirmed"]}
@@ -465,7 +464,11 @@ with right_col:
                 【全会話ログ】{curr_proj["full_transcript"]}
                 【指示】
                 {tasks_instruction}
-                ※Markdown形式ではなく、読みやすいプレーンテキストで出力してください。
+                
+                【重要】
+                1. **マークダウン記法は一切使用しないでください。**
+                2. 挨拶や「かしこまりました」等の前置きは不要です。
+                3. 出力は**要点のみを箇条書き**にし、極力短く簡潔にまとめてください。長文は避けてください。
                 """
 
                 with st.spinner("分析中..."):
@@ -484,7 +487,8 @@ with right_col:
         st.markdown("---")
         for i, item in enumerate(curr_proj["meeting_history"]):
             with st.expander(f"出力 #{len(curr_proj['meeting_history'])-i} ({item['time']})", expanded=(i==0)):
-                st.text_area("", value=item['content'], height=200, disabled=True)
+                # 履歴表示をテキストエリアに変更
+                st.text_area(f"history_{i}", value=item['content'], height=200, key=f"hist_area_{i}")
 
     # --- Tab 3: 打ち合わせ後まとめ ---
     with tab3:
@@ -502,6 +506,7 @@ with right_col:
                 st.warning("ログがありません")
             else:
                 with st.spinner("全体分析中..."):
+                    # プロンプト修正: マークダウン禁止
                     prompt = f"""
                     あなたは統括ディレクターです。ログとメモを基にテンプレートを完成させてください。
                     【確定情報】{curr_proj["confirmed"]}
@@ -513,6 +518,8 @@ with right_col:
                     1. テンプレートの空欄を可能な限り埋める。
                     2. 既存内容も詳細化する。
                     3. 未定はTodoへ。
+                    4. **マークダウン記法は使用せず、プレーンテキストで出力してください。**
+                    
                     出力形式: ===CONFIRMED=== (全文) ===PENDING=== (Todo)
                     """
                     text, error = generate_with_model(model_high_quality, prompt)
@@ -553,10 +560,15 @@ with right_col:
     with tab4:
         if st.button("指示書出力", key="btn_c"):
              with st.spinner("作成中..."):
+                # プロンプト修正: マークダウン禁止
                 prompt = f"""
                 以下の確定情報からデザイナーへ渡す制作指示書を作成してください。
                 【確定情報】{curr_proj["confirmed"]}
                 【自由メモ】{curr_proj["director_memo"]}
+                
+                【重要】
+                **マークダウン記法は一切使用しないでください。**
+                プレーンテキストで見やすく整形してください。
                 """
                 text, error = generate_with_model(model_high_quality, prompt)
                 if text: st.text_area("指示書", value=text, height=600)
@@ -564,7 +576,7 @@ with right_col:
 
     # --- Tab 5 ---
     with tab5:
-        st.write("フリー相談")
+        st.write("フリーAI相談")
         chat_container = st.container()
         with chat_container:
             for msg in curr_proj["chat_history"]:
@@ -577,19 +589,24 @@ with right_col:
             
             curr_proj["chat_context"].append(f"User: {user_input}")
             history = "\n".join(curr_proj["chat_context"][-5:])
+            
+            # プロンプト修正: マークダウン禁止
             prompt = f"""
             【状況】{curr_proj["confirmed"]}
             【未定】{curr_proj["pending"]}
             【メモ】{curr_proj["director_memo"]}
             【履歴】{history}
             User: {user_input}
+            
+            【重要】
+            **マークダウン記法は使用せず、プレーンテキストで回答してください。**
             """
             
             with chat_container:
                 with st.chat_message("assistant"):
                     with st.spinner("..."):
                         text, error = generate_with_model(model_high_speed, prompt)
-                        if text: st.markdown(text)
+                        if text: st.write(text) # markdownではなくwrite/textを使用
                         elif error: st.error(error)
             
             if text:
