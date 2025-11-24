@@ -11,7 +11,7 @@ from oauth2client.service_account import ServiceAccountCredentials
 # 1. 設定・準備
 # ==========================================
 st.set_page_config(page_title="AI Director Assistant", layout="wide")
-st.title("🚀 AI Web Direction Assistant (v20.0 PlainText)")
+st.title("🚀 AI Web Direction Assistant (v20.1 History Save)")
 
 error_container = st.container()
 
@@ -288,12 +288,21 @@ curr_proj = get_current_project()
 
 # --- 自動保存用コールバック関数 ---
 def on_text_change(key, field):
-    """テキストエリアの変更時に呼び出され、即座に保存する"""
+    """左カラムのテキストエリア変更用"""
     new_value = st.session_state[key]
     curr_proj_id = st.session_state.data_store["current_project_id"]
     st.session_state.data_store["projects"][curr_proj_id][field] = new_value
     save_to_sheet()
     st.toast(f"💾 {field} を保存しました")
+
+def on_history_change(index, key):
+    """会議サポート履歴の編集保存用"""
+    new_value = st.session_state[key]
+    curr_proj_id = st.session_state.data_store["current_project_id"]
+    # 履歴の該当インデックスの内容を更新
+    st.session_state.data_store["projects"][curr_proj_id]["meeting_history"][index]["content"] = new_value
+    save_to_sheet()
+    st.toast("💾 履歴を更新しました")
 
 st.markdown(f"### 📂 Project: {st.session_state.data_store['current_project_id']}")
 
@@ -369,7 +378,6 @@ with right_col:
 
         if st.button("分析実行（案を作成）", key="btn_a"):
             with st.spinner(f"分析中 ({model_high_quality})..."):
-                # プロンプト修正: マークダウン禁止
                 prompt = f"""
                 あなたはWebディレクターです。
                 以下の「入力メモ」と「ディレクターの自由メモ」から情報を抽出し、
@@ -485,10 +493,20 @@ with right_col:
                     elif error: error_container.error(error)
 
         st.markdown("---")
+        # 履歴の表示（編集保存機能を追加）
         for i, item in enumerate(curr_proj["meeting_history"]):
             with st.expander(f"出力 #{len(curr_proj['meeting_history'])-i} ({item['time']})", expanded=(i==0)):
-                # 履歴表示をテキストエリアに変更
-                st.text_area(f"history_{i}", value=item['content'], height=200, key=f"hist_area_{i}")
+                # テキストエリアに変更し、変更時に保存するコールバックを設定
+                hist_key = f"hist_area_{st.session_state.data_store['current_project_id']}_{i}"
+                st.text_area(
+                    "出力内容（編集可能）", 
+                    value=item['content'], 
+                    height=200, 
+                    key=hist_key,
+                    label_visibility="collapsed",
+                    on_change=on_history_change,
+                    args=(i, hist_key)
+                )
 
     # --- Tab 3: 打ち合わせ後まとめ ---
     with tab3:
@@ -506,7 +524,6 @@ with right_col:
                 st.warning("ログがありません")
             else:
                 with st.spinner("全体分析中..."):
-                    # プロンプト修正: マークダウン禁止
                     prompt = f"""
                     あなたは統括ディレクターです。ログとメモを基にテンプレートを完成させてください。
                     【確定情報】{curr_proj["confirmed"]}
@@ -560,7 +577,6 @@ with right_col:
     with tab4:
         if st.button("指示書出力", key="btn_c"):
              with st.spinner("作成中..."):
-                # プロンプト修正: マークダウン禁止
                 prompt = f"""
                 以下の確定情報からデザイナーへ渡す制作指示書を作成してください。
                 【確定情報】{curr_proj["confirmed"]}
@@ -590,7 +606,6 @@ with right_col:
             curr_proj["chat_context"].append(f"User: {user_input}")
             history = "\n".join(curr_proj["chat_context"][-5:])
             
-            # プロンプト修正: マークダウン禁止
             prompt = f"""
             【状況】{curr_proj["confirmed"]}
             【未定】{curr_proj["pending"]}
