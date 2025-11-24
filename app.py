@@ -11,7 +11,7 @@ from oauth2client.service_account import ServiceAccountCredentials
 # 1. 設定・準備
 # ==========================================
 st.set_page_config(page_title="AI Director Assistant", layout="wide")
-st.title("🚀 AI Web Direction Assistant (v18.1 Fixed)")
+st.title("🚀 AI Web Direction Assistant (v19.0 Auto-Save)")
 
 error_container = st.container()
 
@@ -202,7 +202,7 @@ with st.sidebar:
             with st.spinner("Loading..."):
                 if load_from_sheet():
                     st.success("完了")
-                    st.session_state.ui_version += 1 # 読み込んだらリフレッシュ
+                    st.session_state.ui_version += 1
                     time.sleep(0.5)
                     st.rerun()
     
@@ -212,7 +212,7 @@ with st.sidebar:
                 if save_to_sheet():
                     st.success("完了")
 
-    st.caption("※ Googleスプレッドシートに自動保存されます")
+    st.caption("※ 変更時に自動保存されます")
     st.markdown("---")
 
     st.header("🗂️ プロジェクト")
@@ -225,7 +225,7 @@ with st.sidebar:
     
     if selected_project != st.session_state.data_store["current_project_id"]:
         st.session_state.data_store["current_project_id"] = selected_project
-        st.session_state.ui_version += 1 # プロジェクト切り替えでリフレッシュ
+        st.session_state.ui_version += 1
         st.rerun()
 
     new_proj_name = st.text_input("新規作成", placeholder="案件名...")
@@ -248,7 +248,6 @@ with st.sidebar:
     else:
         api_key = st.text_input("API Key (未設定)", type="password")
 
-    # モデル設定（変数を上書き）
     with st.expander("モデル設定の詳細"):
         model_high_quality = st.text_input("高精度 (分析・出力)", value=model_high_quality)
         model_high_speed = st.text_input("高速 (会議・チャット)", value=model_high_speed)
@@ -287,39 +286,71 @@ def generate_with_model(model_name, prompt):
 
 curr_proj = get_current_project()
 
+# --- 自動保存用コールバック関数 ---
+def on_text_change(key, field):
+    """テキストエリアの変更時に呼び出され、即座に保存する"""
+    new_value = st.session_state[key]
+    # 現在のプロジェクトの該当フィールドを更新
+    curr_proj_id = st.session_state.data_store["current_project_id"]
+    st.session_state.data_store["projects"][curr_proj_id][field] = new_value
+    
+    # クラウドに保存
+    save_to_sheet()
+    # トースト通知（右下に小さく出る）
+    st.toast(f"💾 {field} を保存しました")
+
 st.markdown(f"### 📂 Project: {st.session_state.data_store['current_project_id']}")
 
 # 左右カラムの比率調整
 left_col, right_col = st.columns([1, 1])
 
-# --- 左カラム（バイブル：シンプルテキストボックス版） ---
+# --- 左カラム（バイブル） ---
 with left_col:
     st.subheader("📘 プロジェクト・バイブル")
     
-    # 【修正】キーに ui_version を含めることで、更新時に強制的に再描画させる
     ver_suffix = f"{st.session_state.data_store['current_project_id']}_{st.session_state.ui_version}"
 
     st.caption("▼ 確定情報")
     conf_key = f"conf_{ver_suffix}"
-    new_confirmed = st.text_area("確定情報", value=curr_proj["confirmed"], height=600, key=conf_key, label_visibility="collapsed")
-    if new_confirmed != curr_proj["confirmed"]:
-        curr_proj["confirmed"] = new_confirmed
+    
+    # 手動編集時の自動保存を追加
+    st.text_area(
+        "確定情報", 
+        value=curr_proj["confirmed"], 
+        height=600, 
+        key=conf_key, 
+        label_visibility="collapsed",
+        on_change=on_text_change,
+        args=(conf_key, "confirmed")
+    )
 
     st.markdown("---")
 
     st.caption("▼ 未定・Todo")
     pend_key = f"pend_{ver_suffix}"
-    new_pending = st.text_area("未定事項", value=curr_proj["pending"], height=200, key=pend_key, label_visibility="collapsed")
-    if new_pending != curr_proj["pending"]:
-        curr_proj["pending"] = new_pending
+    st.text_area(
+        "未定事項", 
+        value=curr_proj["pending"], 
+        height=200, 
+        key=pend_key, 
+        label_visibility="collapsed",
+        on_change=on_text_change,
+        args=(pend_key, "pending")
+    )
 
     st.markdown("---")
 
     st.caption("▼ 自由メモ")
     memo_key = f"memo_{ver_suffix}"
-    new_memo = st.text_area("自由メモ", value=curr_proj["director_memo"], height=150, key=memo_key, label_visibility="collapsed")
-    if new_memo != curr_proj["director_memo"]:
-        curr_proj["director_memo"] = new_memo
+    st.text_area(
+        "自由メモ", 
+        value=curr_proj["director_memo"], 
+        height=150, 
+        key=memo_key, 
+        label_visibility="collapsed",
+        on_change=on_text_change,
+        args=(memo_key, "director_memo")
+    )
 
 # --- 右カラム ---
 with right_col:
@@ -333,12 +364,11 @@ with right_col:
         "💡 壁打ち"
     ])
 
-    # --- Tab 1: 事前分析（修正：確認反映フロー） ---
+    # --- Tab 1: 事前分析 ---
     with tab1:
         st.write("メモから情報を整理し、テンプレートを埋める案を作成します")
         tool_a_input = st.text_area("メモを入力", height=100, key="tool_a_input")
         
-        # 一時保存用
         if "pre_analysis_res" not in st.session_state:
             st.session_state.pre_analysis_res = {"conf": "", "pend": ""}
 
@@ -377,28 +407,25 @@ with right_col:
                 elif error:
                     error_container.error(error)
 
-        # 結果表示と反映ボタン
         if st.session_state.pre_analysis_res["conf"]:
             st.success("✅ **分析完了（更新案）**")
             col_b1, col_b2 = st.columns(2)
             with col_b1:
                 st.caption("確定情報の更新案")
-                # 編集可能なテキストエリア
                 new_conf_val = st.text_area("更新案_Conf", value=st.session_state.pre_analysis_res["conf"], height=400, key="edit_pre_conf")
+                st.session_state.pre_analysis_res["conf"] = new_conf_val
                 
             with col_b2:
                 st.caption("Todoの更新案")
                 new_pend_val = st.text_area("更新案_Pend", value=st.session_state.pre_analysis_res["pend"], height=300, key="edit_pre_pend")
+                st.session_state.pre_analysis_res["pend"] = new_pend_val
             
             if st.button("↑ バイブルに反映する", type="primary", key="reflect_pre_analysis"):
-                # 【修正】テキストエリアの現在の値を取得して保存
-                curr_proj["confirmed"] = new_conf_val
-                curr_proj["pending"] = new_pend_val
+                curr_proj["confirmed"] = st.session_state.pre_analysis_res["conf"]
+                curr_proj["pending"] = st.session_state.pre_analysis_res["pend"]
                 
-                # 一時データクリア
                 st.session_state.pre_analysis_res = {"conf": "", "pend": ""}
-                
-                st.session_state.ui_version += 1 # 左カラムを強制リフレッシュ
+                st.session_state.ui_version += 1 
                 st.success("反映完了！")
                 save_to_sheet() 
                 time.sleep(0.5)
@@ -459,7 +486,7 @@ with right_col:
             with st.expander(f"出力 #{len(curr_proj['meeting_history'])-i} ({item['time']})", expanded=(i==0)):
                 st.text_area("", value=item['content'], height=200, disabled=True)
 
-    # --- Tab 3: 打ち合わせ後まとめ（修正：確認反映フロー） ---
+    # --- Tab 3: 打ち合わせ後まとめ ---
     with tab3:
         st.caption(f"使用モデル: `{model_high_quality}`")
         edited_transcript = st.text_area("全会話ログ確認", value=curr_proj["full_transcript"], height=200)
@@ -470,7 +497,7 @@ with right_col:
 
         if "temp_res" not in st.session_state: st.session_state.temp_res = {"conf": "", "pend": ""}
 
-        if st.button("まとめを作成（更新案を作成）", key="btn_post_meeting"):
+        if st.button("まとめ作成（更新案を作成）", key="btn_post_meeting"):
             if not curr_proj["full_transcript"]:
                 st.warning("ログがありません")
             else:
@@ -505,18 +532,18 @@ with right_col:
             with col_b1:
                 st.caption("確定情報の更新案")
                 new_post_conf = st.text_area("更新案_PostConf", value=st.session_state.temp_res["conf"], height=400, key="edit_post_conf")
+                st.session_state.temp_res["conf"] = new_post_conf
             with col_b2:
                 st.caption("Todoの更新案")
                 new_post_pend = st.text_area("更新案_PostPend", value=st.session_state.temp_res["pend"], height=300, key="edit_post_pend")
+                st.session_state.temp_res["pend"] = new_post_pend
             
             if st.button("↑ バイブルに反映する", key="reflect_post"):
-                # 【修正】編集後の値を取得して反映
-                curr_proj["confirmed"] = new_post_conf
-                curr_proj["pending"] = new_post_pend
+                curr_proj["confirmed"] = st.session_state.temp_res["conf"]
+                curr_proj["pending"] = st.session_state.temp_res["pend"]
                 
                 st.session_state.temp_res = {"conf": "", "pend": ""}
-                st.session_state.ui_version += 1 # 左カラムを強制リフレッシュ
-                
+                st.session_state.ui_version += 1 
                 st.success("反映完了")
                 save_to_sheet()
                 time.sleep(0.5)
