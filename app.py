@@ -11,21 +11,11 @@ from oauth2client.service_account import ServiceAccountCredentials
 # 1. 設定・準備
 # ==========================================
 st.set_page_config(page_title="AI Director Assistant", layout="wide", initial_sidebar_state="expanded")
-st.title("🚀 AI Web Direction Assistant (v21.0)")
 
-# オンボーディング（使い方ガイド）
-with st.expander("ℹ️ 初めての方へ：このツールの使い方"):
-    st.markdown("""
-    **このツールは、AIと協力して「最強の制作指示書」を作り上げるためのコックピットです。**
-    
-    * **👈 左側（スマホでは上）：情報の保管庫**
-        * プロジェクトの決定事項や課題がここに溜まります。
-        * AIが整理した結果が反映されますが、**人間が手動で書き換えることも可能**です。
-    * **👉 右側（スマホでは下）：AI作業スペース**
-        * 「STEP 1」から順に進めてください。
-        * AIにメモや会議ログを渡すと、左側の情報を更新する「案」を作ってくれます。
-    """)
+# 許可されたユーザーIDリスト
+ALLOWED_USERS = ["admin", "muramatsu", "wada"]
 
+# エラー表示エリア
 error_container = st.container()
 
 # 変数の初期化
@@ -88,7 +78,7 @@ TikTok：
 本文本文本文本文本文本文本文本文"""
 
 # ==========================================
-# 2. クラウド同期機能（Google Sheets）
+# 2. クラウド同期機能（ユーザー分離対応）
 # ==========================================
 def get_gspread_client():
     try:
@@ -104,7 +94,8 @@ def get_gspread_client():
         st.error(f"Google Sheets認証エラー: {e}")
         return None
 
-def load_from_sheet():
+def load_user_data(user_id):
+    """指定されたユーザーIDのデータを取得する"""
     client = get_gspread_client()
     if not client: return False
     
@@ -113,16 +104,20 @@ def load_from_sheet():
             sheet_name = st.secrets["SPREADSHEET_NAME"]
             sheet = client.open(sheet_name).sheet1
             json_str = sheet.acell('A1').value
+            
             if json_str:
-                data = json.loads(json_str)
-                if "projects" in data:
-                    st.session_state.data_store = data
+                all_data = json.loads(json_str)
+                # ユーザーIDのデータがあれば読み込む
+                if user_id in all_data:
+                    st.session_state.data_store = all_data[user_id]
                     return True
     except Exception as e:
         st.warning(f"データ読み込み失敗（初回またはエラー）: {e}")
-    return False
+    
+    return False # データがない場合は初期化へ
 
-def save_to_sheet():
+def save_user_data(user_id):
+    """指定されたユーザーIDのデータを保存する（他人のデータは消さない）"""
     client = get_gspread_client()
     if not client: return False
     
@@ -130,7 +125,19 @@ def save_to_sheet():
         if "SPREADSHEET_NAME" in st.secrets:
             sheet_name = st.secrets["SPREADSHEET_NAME"]
             sheet = client.open(sheet_name).sheet1
-            json_str = json.dumps(st.session_state.data_store, indent=2, ensure_ascii=False)
+            
+            # まず全データを取得（競合回避のため）
+            current_val = sheet.acell('A1').value
+            if current_val:
+                all_data = json.loads(current_val)
+            else:
+                all_data = {}
+            
+            # 自分のデータだけ更新
+            all_data[user_id] = st.session_state.data_store
+            
+            # 保存
+            json_str = json.dumps(all_data, indent=2, ensure_ascii=False)
             sheet.update_acell('A1', json_str)
             return True
     except Exception as e:
@@ -138,17 +145,35 @@ def save_to_sheet():
         return False
 
 # ==========================================
-# 3. 状態管理
+# 3. ログイン処理 & 状態管理
 # ==========================================
 
-# SecretsからAPIキーを自動取得
-if "GEMINI_API_KEY" in st.secrets:
-    default_api_key = st.secrets["GEMINI_API_KEY"]
-else:
-    default_api_key = ""
+# ログイン状態の確認
+if "logged_in_user" not in st.session_state:
+    st.session_state.logged_in_user = None
 
-# 初期化
-if "data_store" not in st.session_state:
+def login():
+    user_id = st.session_state.login_input
+    if user_id in ALLOWED_USERS:
+        st.session_state.logged_in_user = user_id
+        # ログイン成功時にロードを試みる
+        if not load_user_data(user_id):
+            # データがなければ初期化（init_data_store関数の中身相当）
+            initialize_data_store()
+            # 新規ユーザーとして一度保存枠を作る
+            save_user_data(user_id)
+    else:
+        st.error("IDが間違っています")
+
+def logout():
+    st.session_state.logged_in_user = None
+    st.session_state.data_store = {} # データクリア
+    st.rerun()
+
+def initialize_data_store():
+    # SecretsからAPIキーを自動取得
+    default_api_key = st.secrets.get("GEMINI_API_KEY", "")
+    
     st.session_state.data_store = {
         "api_key": default_api_key,
         "current_project_id": "Default Project",
@@ -164,9 +189,47 @@ if "data_store" not in st.session_state:
             }
         }
     }
-    if load_from_sheet():
-        if default_api_key:
-            st.session_state.data_store["api_key"] = default_api_key
+
+# ------------------------------------------
+# ログイン画面
+# ------------------------------------------
+if not st.session_state.logged_in_user:
+    st.markdown("## 🔒 Login")
+    st.markdown("IDを入力してください (admin, muramatsu, wada)")
+    st.text_input("User ID", key="login_input", on_change=login)
+    if st.button("Login"):
+        login()
+    st.stop() # ログインしていない場合はここで処理を止める
+
+# ==========================================
+# 4. アプリ本体（ログイン後）
+# ==========================================
+
+# ユーザーID取得
+CURRENT_USER = st.session_state.logged_in_user
+
+st.title(f"🚀 AI Web Direction Assistant (User: {CURRENT_USER})")
+
+# オンボーディング（使い方ガイド）
+with st.expander("ℹ️ 初めての方へ：このツールの使い方"):
+    st.markdown("""
+    **このツールは、AIと協力して「最強の制作指示書」を作り上げるためのコックピットです。**
+    
+    * **👈 左側（スマホでは上）：情報の保管庫**
+        * プロジェクトの決定事項や課題がここに溜まります。
+    * **👉 右側（スマホでは下）：AI作業スペース**
+        * 「STEP 1」から順に進めてください。
+    """)
+
+# SecretsからAPIキーを取得（データストアになければ）
+if "GEMINI_API_KEY" in st.secrets:
+    default_api_key = st.secrets["GEMINI_API_KEY"]
+else:
+    default_api_key = ""
+
+# データストアの初期化確認（ロード失敗時などの保険）
+if "data_store" not in st.session_state or not st.session_state.data_store:
+    initialize_data_store()
 
 # ショートカット関数
 def get_current_project():
@@ -203,9 +266,14 @@ if "ui_version" not in st.session_state:
     st.session_state.ui_version = 0
 
 # ==========================================
-# 4. サイドバー
+# 5. サイドバー
 # ==========================================
 with st.sidebar:
+    st.header(f"👤 {CURRENT_USER}")
+    if st.button("ログアウト", type="secondary"):
+        logout()
+        
+    st.markdown("---")
     st.header("☁️ クラウド同期")
     
     col_load, col_save = st.columns(2)
@@ -213,7 +281,7 @@ with st.sidebar:
     with col_load:
         if st.button("📥 読込"):
             with st.spinner("Loading..."):
-                if load_from_sheet():
+                if load_user_data(CURRENT_USER):
                     st.success("完了")
                     st.session_state.ui_version += 1
                     time.sleep(0.5)
@@ -222,7 +290,7 @@ with st.sidebar:
     with col_save:
         if st.button("📤 保存", type="primary"):
             with st.spinner("Saving..."):
-                if save_to_sheet():
+                if save_user_data(CURRENT_USER):
                     st.success("完了")
 
     st.caption("※ 変更時に自動保存されます")
@@ -246,21 +314,26 @@ with st.sidebar:
         if st.button("作成する"):
             if create_new_project(new_proj_name):
                 st.success(f"作成しました: {new_proj_name}")
-                save_to_sheet()
+                save_user_data(CURRENT_USER)
                 st.session_state.ui_version += 1
                 time.sleep(0.5)
                 st.rerun()
 
     st.markdown("---")
 
+    # APIキー設定（ユーザーごとに保存される）
     api_key = st.session_state.data_store.get("api_key", "")
     if not api_key and default_api_key:
         api_key = default_api_key
     
     if default_api_key:
-        st.success("🔑 APIキー: 認証済み")
+        st.success("🔑 APIキー: 共通設定を使用")
     else:
-        api_key = st.text_input("API Key (未設定)", type="password")
+        new_api_key = st.text_input("API Key (My Key)", value=api_key, type="password")
+        if new_api_key != api_key:
+            st.session_state.data_store["api_key"] = new_api_key
+            save_user_data(CURRENT_USER)
+            api_key = new_api_key
 
     with st.expander("🤖 AIモデル設定 (上級者向け)"):
         model_high_quality = st.text_input("分析用 (Pro)", value=model_high_quality)
@@ -269,16 +342,8 @@ with st.sidebar:
     if api_key:
         genai.configure(api_key=api_key)
 
-# 安全設定
-safety_settings = {
-    HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
-    HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
-    HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
-    HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
-}
-
 # ==========================================
-# 5. メインロジック
+# 6. メインロジック
 # ==========================================
 
 def generate_with_model(model_name, prompt):
@@ -298,14 +363,14 @@ def on_text_change(key, field):
     new_value = st.session_state[key]
     curr_proj_id = st.session_state.data_store["current_project_id"]
     st.session_state.data_store["projects"][curr_proj_id][field] = new_value
-    save_to_sheet()
+    save_user_data(CURRENT_USER)
     st.toast(f"💾 保存しました: {field}")
 
 def on_history_change(index, key):
     new_value = st.session_state[key]
     curr_proj_id = st.session_state.data_store["current_project_id"]
     st.session_state.data_store["projects"][curr_proj_id]["meeting_history"][index]["content"] = new_value
-    save_to_sheet()
+    save_user_data(CURRENT_USER)
     st.toast("💾 履歴を更新しました")
 
 st.markdown(f"### 📂 Project: **{st.session_state.data_store['current_project_id']}**")
@@ -442,7 +507,7 @@ with right_col:
                     st.session_state.pre_analysis_res = {"conf": "", "pend": ""}
                     st.session_state.ui_version += 1 
                     st.success("反映完了！")
-                    save_to_sheet() 
+                    save_user_data(CURRENT_USER) 
                     time.sleep(0.5)
                     st.rerun()
 
@@ -500,7 +565,7 @@ with right_col:
                                 "tasks": tasks_instruction
                             })
                             st.success("完了")
-                            save_to_sheet()
+                            save_user_data(CURRENT_USER)
                         elif error: error_container.error(error)
 
             st.markdown("---")
@@ -582,7 +647,7 @@ with right_col:
                     st.session_state.temp_res = {"conf": "", "pend": ""}
                     st.session_state.ui_version += 1 
                     st.success("反映完了")
-                    save_to_sheet()
+                    save_user_data(CURRENT_USER)
                     time.sleep(0.5)
                     st.rerun()
 
@@ -643,4 +708,4 @@ with right_col:
                 if text:
                     curr_proj["chat_history"].append({"role": "assistant", "text": text})
                     curr_proj["chat_context"].append(f"AI: {text}")
-                    save_to_sheet()
+                    save_user_data(CURRENT_USER)
