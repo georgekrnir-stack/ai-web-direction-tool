@@ -11,11 +11,11 @@ from oauth2client.service_account import ServiceAccountCredentials
 # 1. 設定・準備
 # ==========================================
 st.set_page_config(page_title="AI Director Assistant", layout="wide")
-st.title("🚀 AI Web Direction Assistant (v17.1 Fixed)")
+st.title("🚀 AI Web Direction Assistant (v18.0 Pre-Analysis Fix)")
 
 error_container = st.container()
 
-# 【重要修正】変数の初期化（NameError防止）
+# 変数の初期化
 model_high_quality = "gemini-2.5-pro"
 model_high_speed = "gemini-2.5-flash"
 
@@ -268,7 +268,6 @@ safety_settings = {
 # 5. メインロジック
 # ==========================================
 
-# ここで共通関数を定義（変数が確定した後）
 def generate_with_model(model_name, prompt):
     if not api_key: return None, "APIキー未設定"
     try:
@@ -283,38 +282,36 @@ curr_proj = get_current_project()
 
 st.markdown(f"### 📂 Project: {st.session_state.data_store['current_project_id']}")
 
+# 左右カラムの比率調整
 left_col, right_col = st.columns([1, 1])
 
-# --- 左カラム ---
+# --- 左カラム（バイブル：シンプルテキストボックス版） ---
 with left_col:
     st.subheader("📘 プロジェクト・バイブル")
     
     st.caption("▼ 確定情報")
-    tab_conf_view, tab_conf_edit = st.tabs(["👀 プレビュー", "✏️ 編集"])
-    with tab_conf_edit:
-        conf_key = f"conf_{st.session_state.data_store['current_project_id']}"
-        new_confirmed = st.text_area("確定情報", value=curr_proj["confirmed"], height=500, key=conf_key, label_visibility="collapsed")
+    # キーを一意にするためプロジェクトIDを含める
+    conf_key = f"conf_{st.session_state.data_store['current_project_id']}"
+    new_confirmed = st.text_area("確定情報", value=curr_proj["confirmed"], height=600, key=conf_key, label_visibility="collapsed")
+    # 入力されたら即座にデータストアを更新
+    if new_confirmed != curr_proj["confirmed"]:
         curr_proj["confirmed"] = new_confirmed
-    with tab_conf_view:
-        st.text(curr_proj["confirmed"])
+
+    st.markdown("---")
 
     st.caption("▼ 未定・Todo")
-    tab_pend_view, tab_pend_edit = st.tabs(["👀 プレビュー", "✏️ 編集"])
-    with tab_pend_edit:
-        pend_key = f"pend_{st.session_state.data_store['current_project_id']}"
-        new_pending = st.text_area("未定事項", value=curr_proj["pending"], height=200, key=pend_key, label_visibility="collapsed")
+    pend_key = f"pend_{st.session_state.data_store['current_project_id']}"
+    new_pending = st.text_area("未定事項", value=curr_proj["pending"], height=200, key=pend_key, label_visibility="collapsed")
+    if new_pending != curr_proj["pending"]:
         curr_proj["pending"] = new_pending
-    with tab_pend_view:
-        st.markdown(curr_proj["pending"])
+
+    st.markdown("---")
 
     st.caption("▼ 自由メモ")
-    tab_memo_view, tab_memo_edit = st.tabs(["👀 プレビュー", "✏️ 編集"])
-    with tab_memo_edit:
-        memo_key = f"memo_{st.session_state.data_store['current_project_id']}"
-        new_memo = st.text_area("自由メモ", value=curr_proj["director_memo"], height=150, key=memo_key, label_visibility="collapsed")
+    memo_key = f"memo_{st.session_state.data_store['current_project_id']}"
+    new_memo = st.text_area("自由メモ", value=curr_proj["director_memo"], height=150, key=memo_key, label_visibility="collapsed")
+    if new_memo != curr_proj["director_memo"]:
         curr_proj["director_memo"] = new_memo
-    with tab_memo_view:
-        st.markdown(curr_proj["director_memo"])
 
 # --- 右カラム ---
 with right_col:
@@ -328,12 +325,17 @@ with right_col:
         "💡 壁打ち"
     ])
 
-    # --- Tab 1 ---
+    # --- Tab 1: 事前分析（修正：確認反映フローへ変更） ---
     with tab1:
-        st.write("メモから情報を整理")
+        st.write("メモから情報を整理し、テンプレートを埋める案を作成します")
         tool_a_input = st.text_area("メモを入力", height=100, key="tool_a_input")
-        if st.button("分析実行", key="btn_a"):
-            with st.spinner(f"分析中..."):
+        
+        # 一時保存用（分析結果）
+        if "pre_analysis_res" not in st.session_state:
+            st.session_state.pre_analysis_res = {"conf": "", "pend": ""}
+
+        if st.button("分析実行（案を作成）", key="btn_a"):
+            with st.spinner(f"分析中 ({model_high_quality})..."):
                 prompt = f"""
                 あなたはWebディレクターです。
                 以下の「入力メモ」と「ディレクターの自由メモ」から情報を抽出し、
@@ -355,22 +357,47 @@ with right_col:
                 
                 出力形式: ===SECTION1=== (埋めた後の確定情報全文) ===SECTION2=== (戦略・未定事項)
                 """
-                # ここで model_high_quality を使用（初期化済みなのでエラーにならない）
                 text, error = generate_with_model(model_high_quality, prompt)
                 if text:
                     if "===SECTION2===" in text:
                         parts = text.split("===SECTION2===")
-                        curr_proj["confirmed"] = parts[0].replace("===SECTION1===", "").strip()
-                        curr_proj["pending"] = parts[1].strip()
+                        st.session_state.pre_analysis_res["conf"] = parts[0].replace("===SECTION1===", "").strip()
+                        st.session_state.pre_analysis_res["pend"] = parts[1].strip()
                     else:
-                        curr_proj["confirmed"] = text
-                    st.success("反映しました")
-                    save_to_sheet() 
-                    time.sleep(0.5)
-                    st.rerun()
-                elif error: error_container.error(error)
+                        st.session_state.pre_analysis_res["conf"] = text
+                        st.session_state.pre_analysis_res["pend"] = curr_proj["pending"]
+                elif error:
+                    error_container.error(error)
 
-    # --- Tab 2 ---
+        # 結果表示と反映ボタン（ここを追加）
+        if st.session_state.pre_analysis_res["conf"]:
+            st.success("✅ **分析完了（更新案）**")
+            col_b1, col_b2 = st.columns(2)
+            with col_b1:
+                st.caption("確定情報の更新案")
+                # 編集可能なテキストエリアで表示
+                new_conf_val = st.text_area("更新案_Conf", value=st.session_state.pre_analysis_res["conf"], height=400, key="edit_pre_conf")
+                # 編集されたら一時保存を更新
+                st.session_state.pre_analysis_res["conf"] = new_conf_val
+                
+            with col_b2:
+                st.caption("Todoの更新案")
+                new_pend_val = st.text_area("更新案_Pend", value=st.session_state.pre_analysis_res["pend"], height=300, key="edit_pre_pend")
+                st.session_state.pre_analysis_res["pend"] = new_pend_val
+            
+            if st.button("↑ バイブルに反映する", type="primary", key="reflect_pre_analysis"):
+                curr_proj["confirmed"] = st.session_state.pre_analysis_res["conf"]
+                curr_proj["pending"] = st.session_state.pre_analysis_res["pend"]
+                
+                # 一時データクリア
+                st.session_state.pre_analysis_res = {"conf": "", "pend": ""}
+                
+                st.success("反映完了！")
+                save_to_sheet() 
+                time.sleep(0.5)
+                st.rerun()
+
+    # --- Tab 2: 会議サポート ---
     with tab2:
         st.caption(f"使用モデル: `{model_high_speed}`")
         new_log_input = st.text_area("会話ログ（追記）", height=100, key="meeting_log_input")
@@ -404,7 +431,7 @@ with right_col:
                 【全会話ログ】{curr_proj["full_transcript"]}
                 【指示】
                 {tasks_instruction}
-                ※Markdown形式で見やすく整理してください。
+                ※Markdown形式ではなく、読みやすいプレーンテキストで出力してください。
                 """
 
                 with st.spinner("分析中..."):
@@ -423,19 +450,20 @@ with right_col:
         st.markdown("---")
         for i, item in enumerate(curr_proj["meeting_history"]):
             with st.expander(f"出力 #{len(curr_proj['meeting_history'])-i} ({item['time']})", expanded=(i==0)):
-                st.markdown(item['content'])
+                st.text_area("", value=item['content'], height=200, disabled=True) # コピーしやすいようTextareaに変更
 
-    # --- Tab 3 ---
+    # --- Tab 3: 打ち合わせ後まとめ ---
     with tab3:
         st.caption(f"使用モデル: `{model_high_quality}`")
         edited_transcript = st.text_area("全会話ログ確認", value=curr_proj["full_transcript"], height=200)
-        curr_proj["full_transcript"] = edited_transcript
+        if edited_transcript != curr_proj["full_transcript"]:
+            curr_proj["full_transcript"] = edited_transcript
         
         director_instruction = st.text_area("追加指示", height=80, placeholder="例：デザインはA案で確定としてまとめる")
 
         if "temp_res" not in st.session_state: st.session_state.temp_res = {"conf": "", "pend": ""}
 
-        if st.button("まとめ作成", key="btn_post_meeting"):
+        if st.button("まとめ作成（更新案を作成）", key="btn_post_meeting"):
             if not curr_proj["full_transcript"]:
                 st.warning("ログがありません")
             else:
@@ -465,13 +493,22 @@ with right_col:
                     elif error: error_container.error(error)
 
         if st.session_state.temp_res["conf"]:
+            st.success("✅ **分析完了（更新案）**")
             col_b1, col_b2 = st.columns(2)
-            with col_b1: st.text_area("更新案", value=st.session_state.temp_res["conf"], height=400)
-            with col_b2: st.text_area("Todo案", value=st.session_state.temp_res["pend"], height=300)
+            with col_b1:
+                st.caption("確定情報の更新案")
+                # ここも編集可能にする
+                new_post_conf = st.text_area("更新案_PostConf", value=st.session_state.temp_res["conf"], height=400, key="edit_post_conf")
+                st.session_state.temp_res["conf"] = new_post_conf
+            with col_b2:
+                st.caption("Todoの更新案")
+                new_post_pend = st.text_area("更新案_PostPend", value=st.session_state.temp_res["pend"], height=300, key="edit_post_pend")
+                st.session_state.temp_res["pend"] = new_post_pend
             
             if st.button("↑ 反映する", key="reflect_post"):
                 curr_proj["confirmed"] = st.session_state.temp_res["conf"]
                 curr_proj["pending"] = st.session_state.temp_res["pend"]
+                
                 st.session_state.temp_res = {"conf": "", "pend": ""}
                 st.success("反映完了")
                 save_to_sheet()
@@ -488,7 +525,7 @@ with right_col:
                 【自由メモ】{curr_proj["director_memo"]}
                 """
                 text, error = generate_with_model(model_high_quality, prompt)
-                if text: st.markdown(text)
+                if text: st.text_area("指示書", value=text, height=600)
                 elif error: error_container.error(error)
 
     # --- Tab 5 ---
