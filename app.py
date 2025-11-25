@@ -5,8 +5,19 @@ import time
 import datetime
 import json
 import gspread
-# 【修正】例外クラスを直接インポートしてAttributeErrorを回避
-from gspread.exceptions import CellNotFound
+# 【修正】バージョンの違いによるインポートエラーを回避するためのロジックを追加
+try:
+    from gspread.exceptions import CellNotFound, WorksheetNotFound
+except ImportError:
+    # 古いgspreadバージョンなどの場合のフォールバック
+    try:
+        CellNotFound = gspread.CellNotFound
+        WorksheetNotFound = gspread.WorksheetNotFound
+    except AttributeError:
+        # 万が一どちらも見つからない場合は一般的なExceptionにしておく（クラッシュ回避）
+        CellNotFound = Exception
+        WorksheetNotFound = Exception
+
 from oauth2client.service_account import ServiceAccountCredentials
 
 # ==========================================
@@ -112,7 +123,7 @@ class SpreadsheetDB:
             spreadsheet = self.client.open(self.sheet_name)
             try:
                 ws = spreadsheet.worksheet(title)
-            except gspread.WorksheetNotFound:
+            except WorksheetNotFound: # 【修正】インポートしたクラスを使用
                 ws = spreadsheet.add_worksheet(title=title, rows=100, cols=len(headers))
                 ws.append_row(headers)
             return ws
