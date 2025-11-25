@@ -4,17 +4,16 @@ from google.generativeai.types import HarmCategory, HarmBlockThreshold
 import time
 import datetime
 import json
+import uuid # ID生成用にインポート
 import gspread
-# 【修正】バージョンの違いによるインポートエラーを回避するためのロジックを追加
+# 例外クラスを直接インポート
 try:
     from gspread.exceptions import CellNotFound, WorksheetNotFound
 except ImportError:
-    # 古いgspreadバージョンなどの場合のフォールバック
     try:
         CellNotFound = gspread.CellNotFound
         WorksheetNotFound = gspread.WorksheetNotFound
     except AttributeError:
-        # 万が一どちらも見つからない場合は一般的なExceptionにしておく（クラッシュ回避）
         CellNotFound = Exception
         WorksheetNotFound = Exception
 
@@ -118,12 +117,11 @@ class SpreadsheetDB:
         return None
 
     def _get_or_create_worksheet(self, title, headers):
-        """シートを取得、なければ作成してヘッダーを設定"""
         try:
             spreadsheet = self.client.open(self.sheet_name)
             try:
                 ws = spreadsheet.worksheet(title)
-            except WorksheetNotFound: # 【修正】インポートしたクラスを使用
+            except WorksheetNotFound:
                 ws = spreadsheet.add_worksheet(title=title, rows=100, cols=len(headers))
                 ws.append_row(headers)
             return ws
@@ -131,39 +129,30 @@ class SpreadsheetDB:
             st.error(f"シート操作エラー: {e}")
             return None
 
-    # --- Config操作 (ユーザー設定) ---
+    # --- Config操作 ---
     def get_user_config(self, user_id):
-        """ユーザーの設定（APIキーなど）を取得"""
         ws = self._get_or_create_worksheet("config", ["user_id", "api_key", "last_project_id"])
         if not ws: return None, None
-        
         try:
             records = ws.get_all_records()
             for r in records:
                 if str(r["user_id"]) == user_id:
                     return r["api_key"], r["last_project_id"]
-        except:
-            pass
+        except: pass
         return "", ""
 
     def save_user_config(self, user_id, api_key, last_project_id):
-        """ユーザー設定を保存（行があれば更新、なければ追加）"""
         ws = self._get_or_create_worksheet("config", ["user_id", "api_key", "last_project_id"])
         if not ws: return
-        
         try:
             cell = ws.find(user_id, in_column=1)
-            # 更新
             ws.update_cell(cell.row, 2, api_key)
             ws.update_cell(cell.row, 3, last_project_id)
-        except CellNotFound: # 【修正】インポートしたクラスを使用
-            # 新規作成
+        except CellNotFound:
             ws.append_row([user_id, api_key, last_project_id])
 
-    # --- Project操作 (データ本体) ---
+    # --- Project操作 ---
     def get_user_projects(self, user_id):
-        """ユーザー専用シートから全プロジェクトを読み込む"""
-        # 列定義: ID, 確定情報, 未定, メモ, ログ, JSONデータ(履歴等)
         headers = ["project_id", "confirmed", "pending", "memo", "transcript", "json_data", "updated_at"]
         ws = self._get_or_create_worksheet(user_id, headers)
         if not ws: return {}
@@ -174,8 +163,6 @@ class SpreadsheetDB:
             for r in records:
                 pid = str(r["project_id"])
                 if not pid: continue
-                
-                # JSONデータの復元（チャット履歴など）
                 try:
                     extra_data = json.loads(r["json_data"]) if r["json_data"] else {}
                 except:
@@ -191,17 +178,14 @@ class SpreadsheetDB:
                     "chat_context": extra_data.get("chat_context", [])
                 }
         except Exception as e:
-            st.warning(f"データ読み込み中にエラーが発生しました（初期化します）: {e}")
-        
+            st.warning(f"データ読み込みエラー: {e}")
         return projects
 
     def save_project(self, user_id, project_id, data):
-        """指定したプロジェクトのみを保存（行更新）"""
         headers = ["project_id", "confirmed", "pending", "memo", "transcript", "json_data", "updated_at"]
         ws = self._get_or_create_worksheet(user_id, headers)
         if not ws: return
 
-        # 保存用にデータを整形
         json_pack = json.dumps({
             "meeting_history": data["meeting_history"],
             "chat_history": data["chat_history"],
@@ -221,22 +205,16 @@ class SpreadsheetDB:
 
         try:
             cell = ws.find(project_id, in_column=1)
-            # 行全体を更新
             range_name = f"A{cell.row}:G{cell.row}"
-            # 【修正】gspread v6対応のため、キーワード引数で渡すのが安全ですが、
-            # 古いバージョンとの互換性も考えシンプルなupdateを使用
             ws.update(range_name, [row_data])
-        except CellNotFound: # 【修正】インポートしたクラスを使用
-            # 新規プロジェクト
+        except CellNotFound:
             ws.append_row(row_data)
         except Exception as e:
-            # 50000文字制限のエラーハンドリング
             if "400" in str(e) and "50000" in str(e):
-                st.error("⚠️ 保存失敗: データ量が多すぎます（1つの項目が50,000文字を超えています）。ログやメモを整理してください。")
+                st.error("⚠️ 保存失敗: データ量が多すぎます。")
             else:
                 st.error(f"保存エラー: {e}")
 
-# DBインスタンス
 db = SpreadsheetDB()
 
 # ==========================================
@@ -259,19 +237,12 @@ def logout():
     st.rerun()
 
 def initialize_user_session(user_id):
-    """ログイン時のデータ読み込み"""
     with st.spinner("データを読み込んでいます..."):
-        # 1. 設定読み込み
         api_key, last_proj = db.get_user_config(user_id)
-        
-        # Secretsのキーがあればそれを優先（なければDBの値）
         default_key = st.secrets.get("GEMINI_API_KEY", "")
         st.session_state.api_key = default_key if default_key else api_key
         
-        # 2. プロジェクトデータ読み込み
         projects = db.get_user_projects(user_id)
-        
-        # プロジェクトがなければデフォルト作成
         if not projects:
             projects = {
                 "Default Project": {
@@ -284,18 +255,15 @@ def initialize_user_session(user_id):
                     "chat_context": []
                 }
             }
-            # 即保存してシートを作る
             db.save_project(user_id, "Default Project", projects["Default Project"])
         
         st.session_state.projects_cache = projects
         
-        # 最後に開いていたプロジェクトを選択
         if last_proj and last_proj in projects:
             st.session_state.current_project_id = last_proj
         else:
             st.session_state.current_project_id = list(projects.keys())[0]
 
-# ログイン画面
 if not st.session_state.logged_in_user:
     st.markdown("## 🔒 Login")
     st.text_input("User ID", key="login_input", on_change=login)
@@ -309,38 +277,47 @@ if not st.session_state.logged_in_user:
 CURRENT_USER = st.session_state.logged_in_user
 st.title(f"🚀 AI Web Direction Assistant (User: {CURRENT_USER})")
 
-# データ整合性チェック
+with st.expander("ℹ️ 初めての方へ：このツールの使い方"):
+    st.markdown("""
+    **AIと協力して「最強の制作指示書」を作り上げるコックピットです。**
+    * **👈 左側：情報の保管庫**（プロジェクトの正解データ）
+    * **👉 右側：AI作業スペース**（STEP 1から順に進める）
+    """)
+
 if "projects_cache" not in st.session_state:
     initialize_user_session(CURRENT_USER)
 
-# 現在のプロジェクトデータへの参照を取得
 if st.session_state.current_project_id not in st.session_state.projects_cache:
     st.session_state.current_project_id = list(st.session_state.projects_cache.keys())[0]
     
 curr_proj = st.session_state.projects_cache[st.session_state.current_project_id]
 
-# APIキー設定
 if st.session_state.api_key:
     genai.configure(api_key=st.session_state.api_key)
 
-# --- 保存ロジック（最適化） ---
-def auto_save():
-    """現在のプロジェクトだけをDBに保存"""
+# UIリフレッシュ用バージョン管理
+if "ui_version" not in st.session_state:
+    st.session_state.ui_version = 0
+
+# --- 保存ロジック（画面リフレッシュ付き） ---
+def auto_save(refresh=False):
+    """保存して、必要ならUIバージョンを上げてリフレッシュ"""
     db.save_project(CURRENT_USER, st.session_state.current_project_id, curr_proj)
-    # 設定（最後に開いたプロジェクト）も保存
     db.save_user_config(CURRENT_USER, st.session_state.api_key, st.session_state.current_project_id)
+    if refresh:
+        st.session_state.ui_version += 1
 
 # コールバック
 def on_text_change(key, field):
     new_value = st.session_state[key]
     curr_proj[field] = new_value
-    auto_save()
+    auto_save(refresh=False) # 入力中のリフレッシュは不要
     st.toast(f"💾 保存しました")
 
 def on_history_change(index, key):
     new_value = st.session_state[key]
     curr_proj["meeting_history"][index]["content"] = new_value
-    auto_save()
+    auto_save(refresh=False)
     st.toast("💾 履歴を更新しました")
 
 # ==========================================
@@ -361,13 +338,13 @@ with st.sidebar:
     
     if selected_project != st.session_state.current_project_id:
         st.session_state.current_project_id = selected_project
+        st.session_state.ui_version += 1 # 切り替え時はリフレッシュ
         st.rerun()
 
     with st.expander("＋ 新規プロジェクト作成"):
         new_proj_name = st.text_input("案件名", placeholder="例: 株式会社〇〇様")
         if st.button("作成"):
             if new_proj_name and new_proj_name not in st.session_state.projects_cache:
-                # データ構造作成
                 st.session_state.projects_cache[new_proj_name] = {
                     "confirmed": DEFAULT_TEMPLATE,
                     "pending": "【次回確認事項】\n- ",
@@ -378,7 +355,7 @@ with st.sidebar:
                     "chat_context": []
                 }
                 st.session_state.current_project_id = new_proj_name
-                auto_save() # DBに枠を作る
+                auto_save(refresh=True) # 作成時はリフレッシュ
                 st.success(f"作成: {new_proj_name}")
                 time.sleep(0.5)
                 st.rerun()
@@ -387,14 +364,13 @@ with st.sidebar:
 
     st.markdown("---")
     
-    # APIキー管理
     if st.secrets.get("GEMINI_API_KEY"):
         st.success("🔑 APIキー: 共通設定を使用中")
     else:
         new_key = st.text_input("API Key", value=st.session_state.api_key, type="password")
         if new_key != st.session_state.api_key:
             st.session_state.api_key = new_key
-            auto_save() # Configに保存
+            auto_save(refresh=False)
             st.rerun()
 
     with st.expander("🤖 モデル設定"):
@@ -405,8 +381,8 @@ with st.sidebar:
 # 6. メインUI
 # ==========================================
 
-# UIリフレッシュ用キー生成（プロジェクトが変わるたびにIDを変えて再描画）
-ui_key_suffix = f"{st.session_state.current_project_id}"
+# キーにUIバージョンを含めて、強制再描画を実現
+ui_suffix = f"{st.session_state.current_project_id}_{st.session_state.ui_version}"
 
 st.markdown(f"### 📂 Project: **{st.session_state.current_project_id}**")
 
@@ -418,7 +394,7 @@ with left_col:
         st.subheader("🗂 プロジェクト情報管理")
         
         st.markdown("#### 📂 決定事項（要件定義）")
-        conf_key = f"conf_{ui_key_suffix}"
+        conf_key = f"conf_{ui_suffix}"
         st.text_area(
             "決定事項", value=curr_proj["confirmed"], height=500, 
             key=conf_key, label_visibility="collapsed",
@@ -426,7 +402,7 @@ with left_col:
         )
 
         st.markdown("#### ❓ 未決・確認リスト")
-        pend_key = f"pend_{ui_key_suffix}"
+        pend_key = f"pend_{ui_suffix}"
         st.text_area(
             "未定事項", value=curr_proj["pending"], height=200, 
             key=pend_key, label_visibility="collapsed",
@@ -434,7 +410,7 @@ with left_col:
         )
 
         st.markdown("#### 📝 自由メモ・備忘録")
-        memo_key = f"memo_{ui_key_suffix}"
+        memo_key = f"memo_{ui_suffix}"
         st.text_area(
             "自由メモ", value=curr_proj["director_memo"], height=150, 
             key=memo_key, label_visibility="collapsed",
@@ -505,7 +481,9 @@ with right_col:
                     curr_proj["confirmed"] = new_c
                     curr_proj["pending"] = new_p
                     st.session_state.pre_res = {"conf": "", "pend": ""}
-                    auto_save()
+                    
+                    # 【重要】UIバージョンを更新して再実行（これで左側が強制更新される）
+                    auto_save(refresh=True)
                     st.rerun()
 
         # --- STEP 2 ---
@@ -543,14 +521,21 @@ with right_col:
                         text, error = generate_with_model(model_high_speed, prompt)
                         if text:
                             now = datetime.datetime.now().strftime("%H:%M")
-                            curr_proj["meeting_history"].insert(0, {"time": now, "content": text})
-                            auto_save()
+                            # 履歴追加時に一意なID（UUID）を生成して持たせる
+                            unique_id = str(uuid.uuid4())
+                            curr_proj["meeting_history"].insert(0, {"id": unique_id, "time": now, "content": text})
+                            auto_save(refresh=True) # 画面更新
+                            st.rerun()
                         elif error: error_container.error(error)
 
             st.markdown("---")
+            # 履歴表示（UUIDをキーに使うことで重複・キャッシュ問題を回避）
             for i, item in enumerate(curr_proj["meeting_history"]):
+                # 過去データにIDがない場合のフォールバック
+                item_id = item.get("id", f"legacy_{i}")
+                
                 with st.expander(f"出力 #{len(curr_proj['meeting_history'])-i} ({item['time']})", expanded=(i==0)):
-                    hk = f"h_{ui_key_suffix}_{i}"
+                    hk = f"hist_{item_id}"
                     st.text_area("", value=item['content'], height=200, key=hk, on_change=on_history_change, args=(i, hk))
 
         # --- STEP 3 ---
@@ -604,7 +589,7 @@ with right_col:
                     curr_proj["confirmed"] = new_c
                     curr_proj["pending"] = new_p
                     st.session_state.post_res = {"conf": "", "pend": ""}
-                    auto_save()
+                    auto_save(refresh=True)
                     st.rerun()
 
         # --- STEP 4 ---
@@ -653,4 +638,4 @@ with right_col:
                 if text:
                     curr_proj["chat_history"].append({"role": "assistant", "text": text})
                     curr_proj["chat_context"].append(f"AI: {text}")
-                    auto_save()
+                    auto_save(refresh=False)
