@@ -4,9 +4,8 @@ from google.generativeai.types import HarmCategory, HarmBlockThreshold
 import time
 import datetime
 import json
-import uuid # ID生成用にインポート
+import uuid
 import gspread
-# 例外クラスを直接インポート
 try:
     from gspread.exceptions import CellNotFound, WorksheetNotFound
 except ImportError:
@@ -24,13 +23,9 @@ from oauth2client.service_account import ServiceAccountCredentials
 # ==========================================
 st.set_page_config(page_title="AI Director Assistant", layout="wide", initial_sidebar_state="expanded")
 
-# 許可されたユーザーID
 ALLOWED_USERS = ["admin", "muramatsu", "wada"]
-
-# エラー表示エリア
 error_container = st.container()
 
-# 安全設定
 safety_settings = {
     HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
     HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
@@ -38,11 +33,9 @@ safety_settings = {
     HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
 }
 
-# 変数の初期化
 model_high_quality = "gemini-2.5-pro"
 model_high_speed = "gemini-2.5-flash"
 
-# デフォルトテンプレート
 DEFAULT_TEMPLATE = """■基本情報
 クライアント名：
 新規・リニューアル：
@@ -98,7 +91,7 @@ TikTok：
 本文本文本文本文本文本文本文本文"""
 
 # ==========================================
-# 2. データベース管理クラス (GSpread)
+# 2. データベース管理クラス
 # ==========================================
 class SpreadsheetDB:
     def __init__(self):
@@ -129,7 +122,6 @@ class SpreadsheetDB:
             st.error(f"シート操作エラー: {e}")
             return None
 
-    # --- Config操作 ---
     def get_user_config(self, user_id):
         ws = self._get_or_create_worksheet("config", ["user_id", "api_key", "last_project_id"])
         if not ws: return None, None
@@ -151,9 +143,9 @@ class SpreadsheetDB:
         except CellNotFound:
             ws.append_row([user_id, api_key, last_project_id])
 
-    # --- Project操作 ---
     def get_user_projects(self, user_id):
-        headers = ["project_id", "confirmed", "pending", "memo", "transcript", "json_data", "updated_at"]
+        # 【更新】strategyカラムを追加
+        headers = ["project_id", "confirmed", "pending", "memo", "transcript", "json_data", "updated_at", "strategy"]
         ws = self._get_or_create_worksheet(user_id, headers)
         if not ws: return {}
 
@@ -173,6 +165,8 @@ class SpreadsheetDB:
                     "pending": r["pending"],
                     "director_memo": r["memo"],
                     "full_transcript": r["transcript"],
+                    # 新規追加フィールド（既存データにない場合は空文字）
+                    "strategy": r.get("strategy", ""), 
                     "meeting_history": extra_data.get("meeting_history", []),
                     "chat_history": extra_data.get("chat_history", []),
                     "chat_context": extra_data.get("chat_context", [])
@@ -182,7 +176,8 @@ class SpreadsheetDB:
         return projects
 
     def save_project(self, user_id, project_id, data):
-        headers = ["project_id", "confirmed", "pending", "memo", "transcript", "json_data", "updated_at"]
+        # 【更新】strategyカラムを追加
+        headers = ["project_id", "confirmed", "pending", "memo", "transcript", "json_data", "updated_at", "strategy"]
         ws = self._get_or_create_worksheet(user_id, headers)
         if not ws: return
 
@@ -193,6 +188,9 @@ class SpreadsheetDB:
         }, ensure_ascii=False)
         
         updated_at = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        
+        # 行データ作成（列順序に注意）
+        # 1:project_id, 2:confirmed, 3:pending, 4:memo, 5:transcript, 6:json_data, 7:updated_at, 8:strategy
         row_data = [
             project_id, 
             data["confirmed"], 
@@ -200,12 +198,14 @@ class SpreadsheetDB:
             data["director_memo"], 
             data["full_transcript"], 
             json_pack,
-            updated_at
+            updated_at,
+            data.get("strategy", "")
         ]
 
         try:
             cell = ws.find(project_id, in_column=1)
-            range_name = f"A{cell.row}:G{cell.row}"
+            # A列からH列まで更新
+            range_name = f"A{cell.row}:H{cell.row}"
             ws.update(range_name, [row_data])
         except CellNotFound:
             ws.append_row(row_data)
@@ -248,6 +248,7 @@ def initialize_user_session(user_id):
                 "Default Project": {
                     "confirmed": DEFAULT_TEMPLATE,
                     "pending": "【次回確認事項】\n- ",
+                    "strategy": "【戦略・分析】\n- ", # 初期値
                     "director_memo": "",
                     "full_transcript": "",
                     "meeting_history": [],
@@ -291,27 +292,27 @@ if st.session_state.current_project_id not in st.session_state.projects_cache:
     st.session_state.current_project_id = list(st.session_state.projects_cache.keys())[0]
     
 curr_proj = st.session_state.projects_cache[st.session_state.current_project_id]
+# 古いデータにstrategyがない場合の補完
+if "strategy" not in curr_proj:
+    curr_proj["strategy"] = "【戦略・分析】\n- "
 
 if st.session_state.api_key:
     genai.configure(api_key=st.session_state.api_key)
 
-# UIリフレッシュ用バージョン管理
 if "ui_version" not in st.session_state:
     st.session_state.ui_version = 0
 
-# --- 保存ロジック（画面リフレッシュ付き） ---
+# --- 保存ロジック ---
 def auto_save(refresh=False):
-    """保存して、必要ならUIバージョンを上げてリフレッシュ"""
     db.save_project(CURRENT_USER, st.session_state.current_project_id, curr_proj)
     db.save_user_config(CURRENT_USER, st.session_state.api_key, st.session_state.current_project_id)
     if refresh:
         st.session_state.ui_version += 1
 
-# コールバック
 def on_text_change(key, field):
     new_value = st.session_state[key]
     curr_proj[field] = new_value
-    auto_save(refresh=False) # 入力中のリフレッシュは不要
+    auto_save(refresh=False)
     st.toast(f"💾 保存しました")
 
 def on_history_change(index, key):
@@ -338,7 +339,7 @@ with st.sidebar:
     
     if selected_project != st.session_state.current_project_id:
         st.session_state.current_project_id = selected_project
-        st.session_state.ui_version += 1 # 切り替え時はリフレッシュ
+        st.session_state.ui_version += 1
         st.rerun()
 
     with st.expander("＋ 新規プロジェクト作成"):
@@ -348,6 +349,7 @@ with st.sidebar:
                 st.session_state.projects_cache[new_proj_name] = {
                     "confirmed": DEFAULT_TEMPLATE,
                     "pending": "【次回確認事項】\n- ",
+                    "strategy": "【戦略・分析】\n- ",
                     "director_memo": "",
                     "full_transcript": "",
                     "meeting_history": [],
@@ -355,7 +357,7 @@ with st.sidebar:
                     "chat_context": []
                 }
                 st.session_state.current_project_id = new_proj_name
-                auto_save(refresh=True) # 作成時はリフレッシュ
+                auto_save(refresh=True)
                 st.success(f"作成: {new_proj_name}")
                 time.sleep(0.5)
                 st.rerun()
@@ -381,7 +383,6 @@ with st.sidebar:
 # 6. メインUI
 # ==========================================
 
-# キーにUIバージョンを含めて、強制再描画を実現
 ui_suffix = f"{st.session_state.current_project_id}_{st.session_state.ui_version}"
 
 st.markdown(f"### 📂 Project: **{st.session_state.current_project_id}**")
@@ -393,6 +394,7 @@ with left_col:
     with st.container(border=True):
         st.subheader("🗂 プロジェクト情報管理")
         
+        # 1. 決定事項
         st.markdown("#### 📂 決定事項（要件定義）")
         conf_key = f"conf_{ui_suffix}"
         st.text_area(
@@ -401,6 +403,7 @@ with left_col:
             on_change=on_text_change, args=(conf_key, "confirmed")
         )
 
+        # 2. 未決リスト
         st.markdown("#### ❓ 未決・確認リスト")
         pend_key = f"pend_{ui_suffix}"
         st.text_area(
@@ -409,6 +412,16 @@ with left_col:
             on_change=on_text_change, args=(pend_key, "pending")
         )
 
+        # 3. 戦略・分析（新設）
+        st.markdown("#### 💡 戦略・分析・キラークエスチョン")
+        strat_key = f"strat_{ui_suffix}"
+        st.text_area(
+            "戦略メモ", value=curr_proj["strategy"], height=200, 
+            key=strat_key, label_visibility="collapsed",
+            on_change=on_text_change, args=(strat_key, "strategy")
+        )
+
+        # 4. 自由メモ
         st.markdown("#### 📝 自由メモ・備忘録")
         memo_key = f"memo_{ui_suffix}"
         st.text_area(
@@ -442,47 +455,64 @@ with right_col:
 
         # --- STEP 1 ---
         with tab1:
-            st.info("💡 **ここでやること**: 問い合わせメールやメモから初期情報を整理します。")
+            st.info("💡 **ここでやること**: 問い合わせメモから初期情報を整理し、戦略を立てます。")
             tool_a_input = st.text_area("メモを入力", height=150, key="tool_a_input")
             
-            if "pre_res" not in st.session_state: st.session_state.pre_res = {"conf": "", "pend": ""}
+            if "pre_res" not in st.session_state: 
+                st.session_state.pre_res = {"conf": "", "pend": "", "strat": ""}
 
             if st.button("▶ 分析実行", key="btn_a", type="primary"):
                 with st.spinner("分析中..."):
                     prompt = f"""
                     あなたはWebディレクターです。
-                    以下のメモから情報を抽出し、テンプレートの空欄を埋めてください。
-                    【テンプレート】{curr_proj["confirmed"]}
-                    【メモ】{tool_a_input}
-                    【ルール】テンプレートの項目名は維持。未定事項は別途抽出。
+                    以下のメモから情報を抽出し、以下の3つに分類して出力してください。
+
+                    【入力メモ】{tool_a_input}
+                    【現在のテンプレート】{curr_proj["confirmed"]}
+
+                    【指示】
+                    1. テンプレートの空欄を埋める（決定事項）。
+                    2. 不足情報や事務的な確認事項を抽出する（未決リスト）。
+                    3. **業界トレンド、競合分析、打ち合わせ時のキラークエスチョン（戦略）** を提案する。
+
                     **マークダウン禁止。プレーンテキストのみ。**
-                    出力形式: ===SECTION1=== (決定事項全文) ===SECTION2=== (未決リスト)
+                    出力形式: ===SECTION1=== (決定事項全文) ===SECTION2=== (未決リスト) ===SECTION3=== (戦略・トレンド・質問案)
                     """
                     text, error = generate_with_model(model_high_quality, prompt)
                     if text:
-                        if "===SECTION2===" in text:
-                            parts = text.split("===SECTION2===")
-                            st.session_state.pre_res["conf"] = parts[0].replace("===SECTION1===", "").strip()
-                            st.session_state.pre_res["pend"] = parts[1].strip()
-                        else:
-                            st.session_state.pre_res["conf"] = text
-                            st.session_state.pre_res["pend"] = curr_proj["pending"]
+                        conf_val = curr_proj["confirmed"]
+                        pend_val = curr_proj["pending"]
+                        strat_val = curr_proj["strategy"]
+
+                        if "===SECTION3===" in text:
+                            parts = text.split("===SECTION3===")
+                            strat_val = parts[1].strip()
+                            remain = parts[0]
+                            if "===SECTION2===" in remain:
+                                p2 = remain.split("===SECTION2===")
+                                pend_val = p2[1].strip()
+                                conf_val = p2[0].replace("===SECTION1===", "").strip()
+                        
+                        st.session_state.pre_res["conf"] = conf_val
+                        st.session_state.pre_res["pend"] = pend_val
+                        st.session_state.pre_res["strat"] = strat_val
                     elif error: error_container.error(error)
 
             if st.session_state.pre_res["conf"]:
                 st.success("✅ 更新案を作成しました")
-                c1, c2 = st.columns(2)
+                c1, c2, c3 = st.tabs(["決定事項 案", "未決リスト 案", "戦略・分析 案"])
                 with c1:
-                    new_c = st.text_area("決定事項 案", value=st.session_state.pre_res["conf"], height=400, key="edit_pre_c")
+                    new_c = st.text_area("決定事項", value=st.session_state.pre_res["conf"], height=400, key="edit_pre_c")
                 with c2:
-                    new_p = st.text_area("未決リスト 案", value=st.session_state.pre_res["pend"], height=300, key="edit_pre_p")
+                    new_p = st.text_area("未決リスト", value=st.session_state.pre_res["pend"], height=300, key="edit_pre_p")
+                with c3:
+                    new_s = st.text_area("戦略・分析", value=st.session_state.pre_res["strat"], height=300, key="edit_pre_s")
                 
                 if st.button("⬅️ 左側に反映", key="reflect_pre", type="primary"):
                     curr_proj["confirmed"] = new_c
                     curr_proj["pending"] = new_p
-                    st.session_state.pre_res = {"conf": "", "pend": ""}
-                    
-                    # 【重要】UIバージョンを更新して再実行（これで左側が強制更新される）
+                    curr_proj["strategy"] = new_s
+                    st.session_state.pre_res = {"conf": "", "pend": "", "strat": ""}
                     auto_save(refresh=True)
                     st.rerun()
 
@@ -512,6 +542,7 @@ with right_col:
                     prompt = f"""
                     【決定事項】{curr_proj["confirmed"]}
                     【未決】{curr_proj["pending"]}
+                    【戦略】{curr_proj["strategy"]}
                     【全ログ】{curr_proj["full_transcript"]}
                     【指示】{tasks}
                     **マークダウン禁止。箇条書きで簡潔に。**
@@ -521,19 +552,15 @@ with right_col:
                         text, error = generate_with_model(model_high_speed, prompt)
                         if text:
                             now = datetime.datetime.now().strftime("%H:%M")
-                            # 履歴追加時に一意なID（UUID）を生成して持たせる
                             unique_id = str(uuid.uuid4())
                             curr_proj["meeting_history"].insert(0, {"id": unique_id, "time": now, "content": text})
-                            auto_save(refresh=True) # 画面更新
+                            auto_save(refresh=True)
                             st.rerun()
                         elif error: error_container.error(error)
 
             st.markdown("---")
-            # 履歴表示（UUIDをキーに使うことで重複・キャッシュ問題を回避）
             for i, item in enumerate(curr_proj["meeting_history"]):
-                # 過去データにIDがない場合のフォールバック
                 item_id = item.get("id", f"legacy_{i}")
-                
                 with st.expander(f"出力 #{len(curr_proj['meeting_history'])-i} ({item['time']})", expanded=(i==0)):
                     hk = f"hist_{item_id}"
                     st.text_area("", value=item['content'], height=200, key=hk, on_change=on_history_change, args=(i, hk))
@@ -548,7 +575,7 @@ with right_col:
             
             add_inst = st.text_area("追加指示", height=80)
             
-            if "post_res" not in st.session_state: st.session_state.post_res = {"conf": "", "pend": ""}
+            if "post_res" not in st.session_state: st.session_state.post_res = {"conf": "", "pend": "", "strat": ""}
 
             if st.button("▶ 更新案を作成", key="btn_post", type="primary"):
                 if not curr_proj["full_transcript"]:
@@ -559,36 +586,50 @@ with right_col:
                         あなたは統括ディレクターです。
                         【決定事項】{curr_proj["confirmed"]}
                         【未決】{curr_proj["pending"]}
+                        【戦略】{curr_proj["strategy"]}
                         【メモ】{curr_proj["director_memo"]}
                         【全ログ】{curr_proj["full_transcript"]}
                         【指示】{add_inst}
-                        1. テンプレートの空欄を埋める。2. 内容を詳細化。3. 未定は未決リストへ。
+                        1. テンプレートの空欄を埋める。2. 未定は未決へ。3. 今後の戦略を更新。
                         **マークダウン禁止。**
-                        出力形式: ===CONFIRMED=== (全文) ===PENDING=== (未決リスト)
+                        出力形式: ===CONFIRMED=== (全文) ===PENDING=== (未決) ===STRATEGY=== (戦略)
                         """
                         text, error = generate_with_model(model_high_quality, prompt)
                         if text:
-                            if "===PENDING===" in text:
-                                parts = text.split("===PENDING===")
-                                st.session_state.post_res["conf"] = parts[0].replace("===CONFIRMED===", "").strip()
-                                st.session_state.post_res["pend"] = parts[1].strip()
-                            else:
-                                st.session_state.post_res["conf"] = text
-                                st.session_state.post_res["pend"] = curr_proj["pending"]
+                            conf_val = curr_proj["confirmed"]
+                            pend_val = curr_proj["pending"]
+                            strat_val = curr_proj["strategy"]
+
+                            # 分割処理
+                            if "===STRATEGY===" in text:
+                                parts = text.split("===STRATEGY===")
+                                strat_val = parts[1].strip()
+                                remain = parts[0]
+                                if "===PENDING===" in remain:
+                                    p2 = remain.split("===PENDING===")
+                                    pend_val = p2[1].strip()
+                                    conf_val = p2[0].replace("===CONFIRMED===", "").strip()
+                            
+                            st.session_state.post_res["conf"] = conf_val
+                            st.session_state.post_res["pend"] = pend_val
+                            st.session_state.post_res["strat"] = strat_val
                         elif error: error_container.error(error)
 
             if st.session_state.post_res["conf"]:
                 st.success("✅ 更新案を作成しました")
-                c1, c2 = st.columns(2)
+                c1, c2, c3 = st.tabs(["決定事項 案", "未決リスト 案", "戦略 案"])
                 with c1:
                     new_c = st.text_area("決定事項 案", value=st.session_state.post_res["conf"], height=400, key="edit_post_c")
                 with c2:
                     new_p = st.text_area("未決リスト 案", value=st.session_state.post_res["pend"], height=300, key="edit_post_p")
+                with c3:
+                    new_s = st.text_area("戦略 案", value=st.session_state.post_res["strat"], height=200, key="edit_post_s")
                 
                 if st.button("⬅️ 左側に反映", key="reflect_post", type="primary"):
                     curr_proj["confirmed"] = new_c
                     curr_proj["pending"] = new_p
-                    st.session_state.post_res = {"conf": "", "pend": ""}
+                    curr_proj["strategy"] = new_s
+                    st.session_state.post_res = {"conf": "", "pend": "", "strat": ""}
                     auto_save(refresh=True)
                     st.rerun()
 
@@ -600,6 +641,7 @@ with right_col:
                     prompt = f"""
                     以下の情報からデザイナーへの指示書を作成してください。
                     【決定事項】{curr_proj["confirmed"]}
+                    【戦略】{curr_proj["strategy"]}
                     【メモ】{curr_proj["director_memo"]}
                     **マークダウン禁止。プレーンテキストで。**
                     """
@@ -623,6 +665,8 @@ with right_col:
                 hist = "\n".join(curr_proj["chat_context"][-5:])
                 prompt = f"""
                 【状況】{curr_proj["confirmed"]}
+                【未決】{curr_proj["pending"]}
+                【戦略】{curr_proj["strategy"]}
                 【メモ】{curr_proj["director_memo"]}
                 【履歴】{hist}
                 User: {u_in}
