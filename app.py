@@ -18,6 +18,14 @@ ALLOWED_USERS = ["admin", "muramatsu", "wada"]
 # エラー表示エリア
 error_container = st.container()
 
+# 【修正】安全設定をここに移動（どこからでも参照できるようにする）
+safety_settings = {
+    HarmCategory.HARM_CATEGORY_HARASSMENT: HarmBlockThreshold.BLOCK_NONE,
+    HarmCategory.HARM_CATEGORY_HATE_SPEECH: HarmBlockThreshold.BLOCK_NONE,
+    HarmCategory.HARM_CATEGORY_SEXUALLY_EXPLICIT: HarmBlockThreshold.BLOCK_NONE,
+    HarmCategory.HARM_CATEGORY_DANGEROUS_CONTENT: HarmBlockThreshold.BLOCK_NONE,
+}
+
 # 変数の初期化
 model_high_quality = "gemini-2.5-pro"
 model_high_speed = "gemini-2.5-flash"
