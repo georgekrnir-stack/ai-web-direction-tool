@@ -5,6 +5,8 @@ import time
 import datetime
 import json
 import gspread
+# 【修正】例外クラスを直接インポートしてAttributeErrorを回避
+from gspread.exceptions import CellNotFound
 from oauth2client.service_account import ServiceAccountCredentials
 
 # ==========================================
@@ -143,7 +145,7 @@ class SpreadsheetDB:
             # 更新
             ws.update_cell(cell.row, 2, api_key)
             ws.update_cell(cell.row, 3, last_project_id)
-        except gspread.exceptions.CellNotFound:
+        except CellNotFound: # 【修正】インポートしたクラスを使用
             # 新規作成
             ws.append_row([user_id, api_key, last_project_id])
 
@@ -208,13 +210,12 @@ class SpreadsheetDB:
 
         try:
             cell = ws.find(project_id, in_column=1)
-            # 行全体を更新（範囲指定で一括更新の方がAPI消費が少ない）
-            # gspreadの update を使用 (row, col_start)
-            # cell.row の行を row_data で上書き
-            # A列〜G列
+            # 行全体を更新
             range_name = f"A{cell.row}:G{cell.row}"
+            # 【修正】gspread v6対応のため、キーワード引数で渡すのが安全ですが、
+            # 古いバージョンとの互換性も考えシンプルなupdateを使用
             ws.update(range_name, [row_data])
-        except gspread.exceptions.CellNotFound:
+        except CellNotFound: # 【修正】インポートしたクラスを使用
             # 新規プロジェクト
             ws.append_row(row_data)
         except Exception as e:
