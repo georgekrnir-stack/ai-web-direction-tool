@@ -116,25 +116,19 @@ class SpreadsheetDB:
             try:
                 ws = spreadsheet.worksheet(title)
                 
-                # 【修正】スキーマ自動更新ロジック
-                # 現在のヘッダーを確認
+                # スキーマ自動更新ロジック
                 try:
                     current_headers = ws.row_values(1)
                 except:
                     current_headers = []
                 
-                # ヘッダーが足りない（＝古いバージョンのシート）場合
+                # ヘッダーが足りない場合
                 if len(current_headers) < len(headers) or "strategy" not in current_headers:
-                    # 列数が足りなければ増やす
                     if ws.col_count < len(headers):
                         ws.resize(cols=len(headers))
-                    
-                    # ヘッダー行を強制的に最新化
-                    # range_name='A1' で1行目全体を上書き
                     try:
                         ws.update(range_name='A1', values=[headers])
                     except:
-                        # 古いgspread等の互換性
                         ws.update('A1', [headers])
                         
             except WorksheetNotFound:
@@ -167,7 +161,6 @@ class SpreadsheetDB:
             ws.append_row([user_id, api_key, last_project_id])
 
     def get_user_projects(self, user_id):
-        # strategy列を含むヘッダー定義
         headers = ["project_id", "confirmed", "pending", "memo", "transcript", "json_data", "updated_at", "strategy"]
         ws = self._get_or_create_worksheet(user_id, headers)
         if not ws: return {}
@@ -188,7 +181,7 @@ class SpreadsheetDB:
                     "pending": r["pending"],
                     "director_memo": r["memo"],
                     "full_transcript": r["transcript"],
-                    "strategy": r.get("strategy", ""), # ここが読み込まれるようになる
+                    "strategy": r.get("strategy", ""),
                     "meeting_history": extra_data.get("meeting_history", []),
                     "chat_history": extra_data.get("chat_history", []),
                     "chat_context": extra_data.get("chat_context", [])
@@ -218,12 +211,11 @@ class SpreadsheetDB:
             data["full_transcript"], 
             json_pack,
             updated_at,
-            data.get("strategy", "") # ここが保存されるようになる
+            data.get("strategy", "")
         ]
 
         try:
             cell = ws.find(project_id, in_column=1)
-            # A列からH列まで更新
             range_name = f"A{cell.row}:H{cell.row}"
             ws.update(range_name, [row_data])
         except CellNotFound:
@@ -279,4 +271,421 @@ def initialize_user_session(user_id):
         
         st.session_state.projects_cache = projects
         
+        # インデント修正箇所
         if last_proj and last_proj in projects:
+            st.session_state.current_project_id = last_proj
+        else:
+            st.session_state.current_project_id = list(projects.keys())[0]
+
+if not st.session_state.logged_in_user:
+    st.markdown("## 🔒 Login")
+    st.text_input("User ID", key="login_input", on_change=login)
+    if st.button("Login"):
+        login()
+    st.stop()
+
+# ==========================================
+# 4. アプリ本体
+# ==========================================
+CURRENT_USER = st.session_state.logged_in_user
+st.title(f"🚀 AI Web Direction Assistant (User: {CURRENT_USER})")
+
+with st.expander("ℹ️ 初めての方へ：このツールの使い方"):
+    st.markdown("""
+    **AIと協力して「最強の制作指示書」を作り上げるコックピットです。**
+    * **👈 左側：情報の保管庫**（プロジェクトの正解データ）
+    * **👉 右側：AI作業スペース**（STEP 1から順に進める）
+    """)
+
+if "projects_cache" not in st.session_state:
+    initialize_user_session(CURRENT_USER)
+
+if st.session_state.current_project_id not in st.session_state.projects_cache:
+    st.session_state.current_project_id = list(st.session_state.projects_cache.keys())[0]
+    
+curr_proj = st.session_state.projects_cache[st.session_state.current_project_id]
+if "strategy" not in curr_proj:
+    curr_proj["strategy"] = "【戦略・分析】\n- "
+
+if st.session_state.api_key:
+    genai.configure(api_key=st.session_state.api_key)
+
+if "ui_version" not in st.session_state:
+    st.session_state.ui_version = 0
+
+# --- 保存ロジック ---
+def auto_save(refresh=False):
+    db.save_project(CURRENT_USER, st.session_state.current_project_id, curr_proj)
+    db.save_user_config(CURRENT_USER, st.session_state.api_key, st.session_state.current_project_id)
+    if refresh:
+        st.session_state.ui_version += 1
+
+def on_text_change(key, field):
+    new_value = st.session_state[key]
+    curr_proj[field] = new_value
+    auto_save(refresh=False)
+    st.toast(f"💾 保存しました")
+
+def on_history_change(index, key):
+    new_value = st.session_state[key]
+    curr_proj["meeting_history"][index]["content"] = new_value
+    auto_save(refresh=False)
+    st.toast("💾 履歴を更新しました")
+
+# ==========================================
+# 5. サイドバー
+# ==========================================
+with st.sidebar:
+    st.header(f"👤 {CURRENT_USER}")
+    if st.button("ログアウト", type="secondary"):
+        logout()
+    
+    st.markdown("---")
+    st.header("🗂️ プロジェクト")
+    
+    project_names = list(st.session_state.projects_cache.keys())
+    current_index = project_names.index(st.session_state.current_project_id)
+    
+    selected_project = st.selectbox("選択中", project_names, index=current_index)
+    
+    if selected_project != st.session_state.current_project_id:
+        st.session_state.current_project_id = selected_project
+        st.session_state.ui_version += 1
+        st.rerun()
+
+    with st.expander("＋ 新規プロジェクト作成"):
+        new_proj_name = st.text_input("案件名", placeholder="例: 株式会社〇〇様")
+        if st.button("作成"):
+            if new_proj_name and new_proj_name not in st.session_state.projects_cache:
+                st.session_state.projects_cache[new_proj_name] = {
+                    "confirmed": DEFAULT_TEMPLATE,
+                    "pending": "【次回確認事項】\n- ",
+                    "strategy": "【戦略・分析】\n- ",
+                    "director_memo": "",
+                    "full_transcript": "",
+                    "meeting_history": [],
+                    "chat_history": [],
+                    "chat_context": []
+                }
+                st.session_state.current_project_id = new_proj_name
+                auto_save(refresh=True)
+                st.success(f"作成: {new_proj_name}")
+                time.sleep(0.5)
+                st.rerun()
+            elif new_proj_name in st.session_state.projects_cache:
+                st.error("同名のプロジェクトが既に存在します")
+
+    st.markdown("---")
+    
+    if st.secrets.get("GEMINI_API_KEY"):
+        st.success("🔑 APIキー: 共通設定を使用中")
+    else:
+        new_key = st.text_input("API Key", value=st.session_state.api_key, type="password")
+        if new_key != st.session_state.api_key:
+            st.session_state.api_key = new_key
+            auto_save(refresh=False)
+            st.rerun()
+
+    with st.expander("🤖 モデル設定"):
+        model_high_quality = st.text_input("分析用", value=model_high_quality)
+        model_high_speed = st.text_input("対話用", value=model_high_speed)
+
+# ==========================================
+# 6. メインUI
+# ==========================================
+
+ui_suffix = f"{st.session_state.current_project_id}_{st.session_state.ui_version}"
+
+st.markdown(f"### 📂 Project: **{st.session_state.current_project_id}**")
+
+left_col, right_col = st.columns([1, 1])
+
+# --- 左カラム（保管庫） ---
+with left_col:
+    with st.container(border=True):
+        st.subheader("🗂 プロジェクト情報管理")
+        
+        st.markdown("#### 📂 決定事項（要件定義）")
+        conf_key = f"conf_{ui_suffix}"
+        st.text_area(
+            "決定事項", value=curr_proj["confirmed"], height=500, 
+            key=conf_key, label_visibility="collapsed",
+            on_change=on_text_change, args=(conf_key, "confirmed")
+        )
+
+        st.markdown("#### ❓ 未決・確認リスト")
+        pend_key = f"pend_{ui_suffix}"
+        st.text_area(
+            "未定事項", value=curr_proj["pending"], height=200, 
+            key=pend_key, label_visibility="collapsed",
+            on_change=on_text_change, args=(pend_key, "pending")
+        )
+
+        st.markdown("#### 💡 戦略・分析・キラークエスチョン")
+        strat_key = f"strat_{ui_suffix}"
+        st.text_area(
+            "戦略メモ", value=curr_proj["strategy"], height=200, 
+            key=strat_key, label_visibility="collapsed",
+            on_change=on_text_change, args=(strat_key, "strategy")
+        )
+
+        st.markdown("#### 📝 自由メモ・備忘録")
+        memo_key = f"memo_{ui_suffix}"
+        st.text_area(
+            "自由メモ", value=curr_proj["director_memo"], height=150, 
+            key=memo_key, label_visibility="collapsed",
+            on_change=on_text_change, args=(memo_key, "director_memo")
+        )
+
+# --- 右カラム（AIツール） ---
+def generate_with_model(model_name, prompt):
+    if not st.session_state.api_key: return None, "APIキー未設定"
+    try:
+        model = genai.GenerativeModel(model_name)
+        response = model.generate_content(prompt, safety_settings=safety_settings)
+        if not response.parts: return None, "応答が空です"
+        return response.text, None
+    except Exception as e:
+        return None, str(e)
+
+with right_col:
+    with st.container(border=True):
+        st.subheader("🤖 AI作業スペース")
+        
+        tab1, tab2, tab3, tab4, tab5 = st.tabs([
+            "STEP 1: 準備・予習", 
+            "STEP 2: 会議中サポート", 
+            "STEP 3: 会議後まとめ", 
+            "STEP 4: 指示書作成", 
+            "💬 AI相談"
+        ])
+
+        # --- STEP 1 ---
+        with tab1:
+            st.info("💡 **ここでやること**: 問い合わせメモから初期情報を整理し、戦略を立てます。")
+            tool_a_input = st.text_area("メモを入力", height=150, key="tool_a_input")
+            
+            if "pre_res" not in st.session_state: 
+                st.session_state.pre_res = {"conf": "", "pend": "", "strat": ""}
+
+            if st.button("▶ 分析実行", key="btn_a", type="primary"):
+                with st.spinner("分析中..."):
+                    prompt = f"""
+                    あなたはWebディレクターです。
+                    以下のメモから情報を抽出し、以下の3つに分類して出力してください。
+
+                    【入力メモ】{tool_a_input}
+                    【現在のテンプレート】{curr_proj["confirmed"]}
+
+                    【指示】
+                    1. テンプレートの空欄を埋める（決定事項）。
+                    2. 不足情報や事務的な確認事項を抽出する（未決リスト）。
+                    3. **業界トレンド、競合分析、打ち合わせ時のキラークエスチョン（戦略）** を提案する。
+
+                    **マークダウン禁止。プレーンテキストのみ。**
+                    出力形式: ===SECTION1=== (決定事項全文) ===SECTION2=== (未決リスト) ===SECTION3=== (戦略・トレンド・質問案)
+                    """
+                    text, error = generate_with_model(model_high_quality, prompt)
+                    if text:
+                        conf_val = curr_proj["confirmed"]
+                        pend_val = curr_proj["pending"]
+                        strat_val = curr_proj["strategy"]
+
+                        if "===SECTION3===" in text:
+                            parts = text.split("===SECTION3===")
+                            strat_val = parts[1].strip()
+                            remain = parts[0]
+                            if "===SECTION2===" in remain:
+                                p2 = remain.split("===SECTION2===")
+                                pend_val = p2[1].strip()
+                                conf_val = p2[0].replace("===SECTION1===", "").strip()
+                        
+                        st.session_state.pre_res["conf"] = conf_val
+                        st.session_state.pre_res["pend"] = pend_val
+                        st.session_state.pre_res["strat"] = strat_val
+                    elif error: error_container.error(error)
+
+            if st.session_state.pre_res["conf"]:
+                st.success("✅ 更新案を作成しました")
+                c1, c2, c3 = st.tabs(["決定事項 案", "未決リスト 案", "戦略・分析 案"])
+                with c1:
+                    new_c = st.text_area("決定事項", value=st.session_state.pre_res["conf"], height=400, key="edit_pre_c")
+                with c2:
+                    new_p = st.text_area("未決リスト", value=st.session_state.pre_res["pend"], height=300, key="edit_pre_p")
+                with c3:
+                    new_s = st.text_area("戦略・分析", value=st.session_state.pre_res["strat"], height=300, key="edit_pre_s")
+                
+                if st.button("⬅️ 左側に反映", key="reflect_pre", type="primary"):
+                    curr_proj["confirmed"] = new_c
+                    curr_proj["pending"] = new_p
+                    curr_proj["strategy"] = new_s
+                    st.session_state.pre_res = {"conf": "", "pend": "", "strat": ""}
+                    auto_save(refresh=True)
+                    st.rerun()
+
+        # --- STEP 2 ---
+        with tab2:
+            st.info("💡 **ここでやること**: 会議ログを記録し、AIのサポートを受けます。")
+            new_log = st.text_area("会話ログ（追記）", height=100, key="log_in", placeholder="録音テキストを貼り付け")
+            
+            c1, c2 = st.columns(2)
+            chk_sum = c1.checkbox("まとめ")
+            chk_iss = c2.checkbox("問題抽出")
+            chk_leak = c1.checkbox("漏れチェック")
+            chk_prop = c2.checkbox("提案作成")
+
+            if st.button("▶ AI実行", key="btn_b", type="primary"):
+                if not new_log and not curr_proj["full_transcript"]:
+                    st.warning("ログがありません")
+                else:
+                    if new_log: curr_proj["full_transcript"] += "\n" + new_log
+                    
+                    tasks = ""
+                    if chk_sum: tasks += "- 要約\n"
+                    if chk_iss: tasks += "- 矛盾・問題点\n"
+                    if chk_leak: tasks += "- ヒアリング漏れ\n"
+                    if chk_prop: tasks += "- 提案\n"
+                    
+                    prompt = f"""
+                    【決定事項】{curr_proj["confirmed"]}
+                    【未決】{curr_proj["pending"]}
+                    【戦略】{curr_proj["strategy"]}
+                    【全ログ】{curr_proj["full_transcript"]}
+                    【指示】{tasks}
+                    **マークダウン禁止。箇条書きで簡潔に。**
+                    """
+                    
+                    with st.spinner("分析中..."):
+                        text, error = generate_with_model(model_high_speed, prompt)
+                        if text:
+                            now = datetime.datetime.now().strftime("%H:%M")
+                            unique_id = str(uuid.uuid4())
+                            curr_proj["meeting_history"].insert(0, {"id": unique_id, "time": now, "content": text})
+                            auto_save(refresh=True)
+                            st.rerun()
+                        elif error: error_container.error(error)
+
+            st.markdown("---")
+            for i, item in enumerate(curr_proj["meeting_history"]):
+                item_id = item.get("id", f"legacy_{i}")
+                with st.expander(f"出力 #{len(curr_proj['meeting_history'])-i} ({item['time']})", expanded=(i==0)):
+                    hk = f"hist_{item_id}"
+                    st.text_area("", value=item['content'], height=200, key=hk, on_change=on_history_change, args=(i, hk))
+
+        # --- STEP 3 ---
+        with tab3:
+            st.info("💡 **ここでやること**: 会議後、全ログを分析して情報を最新化します。")
+            with st.expander("全ログ確認"):
+                edited_log = st.text_area("全ログ", value=curr_proj["full_transcript"], height=200)
+                if edited_log != curr_proj["full_transcript"]:
+                    curr_proj["full_transcript"] = edited_log
+            
+            add_inst = st.text_area("追加指示", height=80)
+            
+            if "post_res" not in st.session_state: st.session_state.post_res = {"conf": "", "pend": "", "strat": ""}
+
+            if st.button("▶ 更新案を作成", key="btn_post", type="primary"):
+                if not curr_proj["full_transcript"]:
+                    st.warning("ログがありません")
+                else:
+                    with st.spinner("全体分析中..."):
+                        prompt = f"""
+                        あなたは統括ディレクターです。
+                        【決定事項】{curr_proj["confirmed"]}
+                        【未決】{curr_proj["pending"]}
+                        【戦略】{curr_proj["strategy"]}
+                        【メモ】{curr_proj["director_memo"]}
+                        【全ログ】{curr_proj["full_transcript"]}
+                        【指示】{add_inst}
+                        1. テンプレートの空欄を埋める。2. 未定は未決へ。3. 今後の戦略を更新。
+                        **マークダウン禁止。**
+                        出力形式: ===CONFIRMED=== (全文) ===PENDING=== (未決) ===STRATEGY=== (戦略)
+                        """
+                        text, error = generate_with_model(model_high_quality, prompt)
+                        if text:
+                            conf_val = curr_proj["confirmed"]
+                            pend_val = curr_proj["pending"]
+                            strat_val = curr_proj["strategy"]
+
+                            if "===STRATEGY===" in text:
+                                parts = text.split("===STRATEGY===")
+                                strat_val = parts[1].strip()
+                                remain = parts[0]
+                                if "===PENDING===" in remain:
+                                    p2 = remain.split("===PENDING===")
+                                    pend_val = p2[1].strip()
+                                    conf_val = p2[0].replace("===CONFIRMED===", "").strip()
+                            
+                            st.session_state.post_res["conf"] = conf_val
+                            st.session_state.post_res["pend"] = pend_val
+                            st.session_state.post_res["strat"] = strat_val
+                        elif error: error_container.error(error)
+
+            if st.session_state.post_res["conf"]:
+                st.success("✅ 更新案を作成しました")
+                c1, c2, c3 = st.tabs(["決定事項 案", "未決リスト 案", "戦略 案"])
+                with c1:
+                    new_c = st.text_area("決定事項 案", value=st.session_state.post_res["conf"], height=400, key="edit_post_c")
+                with c2:
+                    new_p = st.text_area("未決リスト 案", value=st.session_state.post_res["pend"], height=300, key="edit_post_p")
+                with c3:
+                    new_s = st.text_area("戦略 案", value=st.session_state.post_res["strat"], height=200, key="edit_post_s")
+                
+                if st.button("⬅️ 左側に反映", key="reflect_post", type="primary"):
+                    curr_proj["confirmed"] = new_c
+                    curr_proj["pending"] = new_p
+                    curr_proj["strategy"] = new_s
+                    st.session_state.post_res = {"conf": "", "pend": "", "strat": ""}
+                    auto_save(refresh=True)
+                    st.rerun()
+
+        # --- STEP 4 ---
+        with tab4:
+            st.info("💡 **ここでやること**: 最終的な指示書を出力します。")
+            if st.button("▶ 指示書出力", key="btn_final", type="primary"):
+                 with st.spinner("作成中..."):
+                    prompt = f"""
+                    以下の情報からデザイナーへの指示書を作成してください。
+                    【決定事項】{curr_proj["confirmed"]}
+                    【戦略】{curr_proj["strategy"]}
+                    【メモ】{curr_proj["director_memo"]}
+                    **マークダウン禁止。プレーンテキストで。**
+                    """
+                    text, error = generate_with_model(model_high_quality, prompt)
+                    if text: st.text_area("指示書", value=text, height=600)
+                    elif error: error_container.error(error)
+
+        # --- AI相談 ---
+        with tab5:
+            st.info("💡 **ここでやること**: フリーチャットで相談できます。")
+            chat_c = st.container()
+            with chat_c:
+                for msg in curr_proj["chat_history"]:
+                    with st.chat_message(msg["role"]): st.write(msg["text"])
+
+            if u_in := st.chat_input("質問..."):
+                curr_proj["chat_history"].append({"role": "user", "text": u_in})
+                with chat_c:
+                    with st.chat_message("user"): st.write(u_in)
+                
+                hist = "\n".join(curr_proj["chat_context"][-5:])
+                prompt = f"""
+                【状況】{curr_proj["confirmed"]}
+                【未決】{curr_proj["pending"]}
+                【戦略】{curr_proj["strategy"]}
+                【メモ】{curr_proj["director_memo"]}
+                【履歴】{hist}
+                User: {u_in}
+                **マークダウン禁止。**
+                """
+                with chat_c:
+                    with st.chat_message("assistant"):
+                        with st.spinner("..."):
+                            text, error = generate_with_model(model_high_speed, prompt)
+                            if text: st.write(text)
+                            elif error: st.error(error)
+                
+                if text:
+                    curr_proj["chat_history"].append({"role": "assistant", "text": text})
+                    curr_proj["chat_context"].append(f"AI: {text}")
+                    auto_save(refresh=False)
